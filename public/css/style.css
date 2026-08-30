@@ -1,0 +1,11 @@
+body {
+  background: #111;
+  color: #eee;
+  font-family: Arial;
+}
+#messages {
+  height: 300px;
+  overflow-y: scroll;
+  border: 1px solid #444;
+  padding: 10px;
+}
