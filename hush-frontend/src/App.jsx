@@ -48,12 +48,13 @@ export default function App() {
   const chatEndRef = useRef(null);
   const localVideoRef = useRef(null);
 
+  // Cleaned compliant rooms list
   const rooms = [
     { id: 'lobby', name: '🌐 General Mingling', intent: 'Mingling' },
     { id: 'serious', name: '💍 Serious Connections Only', intent: 'Serious' },
     { id: 'friends', name: '🤝 Platonic Friend Circles', intent: 'Friends' },
-    { id: 'hookups', name: '🔥 Discrete Hookups', intent: 'Hookups' },
-    { id: 'xxx', name: '😈 XXX Adult Chambers', intent: 'XXX' }
+    { id: 'hookups', name: '🔥 Elite After-Hours Lounge', intent: 'Hookups' },
+    { id: 'xxx', name: '👑 Platinum VIP Chambers', intent: 'XXX' }
   ];
 
   // 4. STRIPE INTEGRATED LIVE SOCKET LISTENER PIPELINE
@@ -87,7 +88,6 @@ export default function App() {
     };
     return () => ws.close();
   }, [activeRoom, isAccountPaused, isPremium, blockedUsers]);
-
   const handleStartVideo = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
@@ -108,6 +108,18 @@ export default function App() {
     setInputValue('');
   };
 
+  // 5. TRIGGER STRIPE WORKFLOW OVER WEBSOCKET
+  const handleUpgradeSubscription = () => {
+    if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
+      alert("Socket connection offline. Please check your server status.");
+      return;
+    }
+    socketRef.current.send(JSON.stringify({
+      type: 'request_checkout_session',
+      user: username
+    }));
+  };
+
   const handleRollDice = () => {
     const rolled = Math.floor(Math.random() * 6) + 1;
     setDiceResult(rolled);
@@ -122,6 +134,7 @@ export default function App() {
   };
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+
   return (
     <div className="flex h-screen w-screen bg-[#04060a] text-slate-100 overflow-hidden font-sans">
       
@@ -144,134 +157,155 @@ export default function App() {
                 <select value={age} onChange={(e) => setAge(e.target.value)} className="w-1/2 bg-slate-900 border border-white/10 rounded-lg px-2 py-1 text-xs outline-none"><option>18</option><option>21</option><option>24</option><option>28</option><option>32</option></select>
                 <input type="text" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="City" className="w-1/2 bg-slate-900 border border-white/10 rounded-lg px-2.5 py-1 text-xs outline-none" />
               </div>
-              <select value={intent} onChange={(e) => setIntent(e.target.value)} className="w-full bg-slate-900 border border-white/10 rounded-lg px-2 py-1 text-xs outline-none"><option>Mingling</option><option>Serious</option><option>Friends</option><option>Hookups</option></select>
+              <select value={intent} onChange={(e) => setIntent(e.target.value)} className="w-full bg-slate-900 border border-white/10 rounded-lg px-2 py-1 text-xs outline-none"><option>Mingling</option><option>Serious</option><option>Friends</option></select>
               <select value={myInterest} onChange={(e) => setMyInterest(e.target.value)} className="w-full bg-slate-900 border border-white/10 rounded-lg px-2 py-1 text-xs outline-none">{sharedInterestsList.map(i => <option key={i}>{i}</option>)}</select>
-              <button type="button" onClick={() => setIsEditingProfile(false)} className="w-full py-1.5 bg-gradient-to-r from-rose-500 to-purple-600 text-xs font-bold rounded-lg uppercase">Save Credentials</button>
+              <button type="button" onClick={() => setIsEditingProfile(false)} className="w-full py-1.5 bg-gradient-to-r from-rose-500 to-purple-600 text-xs font-bold rounded-lg uppercase tracking-wide">Save Profile</button>
             </div>
           ) : (
-            <div className="bg-white/5 border border-white/5 p-3 rounded-xl space-y-2">
-              <div className="flex items-center gap-2">
-                <img src={photoUrl || `https://dicebear.com{username}`} alt="Avatar" className="w-9 h-9 rounded-full object-cover border border-rose-500/30" />
-                <div className="flex-1 min-w-0"><div className="flex items-center gap-1.5"><p className="text-xs font-bold truncate">{username}</p><span className="text-[8px] text-slate-500 font-bold">{age}y • {location}</span></div><p className="text-[9px] text-rose-400 font-bold tracking-wide uppercase">{intent} Mode</p></div>
-                <button type="button" onClick={() => setIsEditingProfile(true)} className="text-[9px] border border-white/10 px-2 py-0.5 rounded">Edit</button>
+            <div className="bg-white/5 border border-white/5 p-3 rounded-xl flex items-center justify-between">
+              <div>
+                <p className="text-xs font-bold text-white">{username}, {age}</p>
+                <p className="text-[10px] text-slate-400">{location} • {intent}</p>
               </div>
+              <button onClick={() => setIsEditingProfile(true)} className="text-[10px] text-rose-400 underline hover:text-rose-300">Edit</button>
             </div>
           )}
 
-          <div className="flex gap-2">
-            <button type="button" onClick={() => setIsAccountPaused(!isAccountPaused)} className={`flex-1 py-1.5 rounded-lg text-[10px] font-bold uppercase border tracking-wider transition-all ${isAccountPaused ? 'bg-amber-500/20 border-amber-500/40 text-amber-300' : 'bg-white/5 border-white/10 text-slate-400 hover:bg-white/10'}`}>{isAccountPaused ? '⏸ Account Paused' : '🟢 Account Active'}</button>
-          </div>
-
+          {/* ACTIVE CHAMBER CONNECTIONS */}
           <div className="space-y-1">
-            <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest px-1">Chambers</p>
-            {rooms.map((r) => (
-              <button key={r.id} onClick={() => { setActiveRoom(r.id); setMessages([]); }} className={`w-full flex items-center justify-between px-2.5 py-2 rounded-xl text-xs ${activeRoom === r.id ? 'bg-gradient-to-r from-rose-500/20 to-transparent border-l-2 border-rose-500 text-rose-400 font-bold' : 'text-slate-400 hover:bg-white/5'}`}><span>{r.name}</span></button>
-            ))}
-          </div>
+            <p className="text-[10px] font-bold text-slate-500 tracking-wider uppercase px-2 mb-2">Active Realms</p>
+            {rooms.map((room) => {
+              const isRestricted = ['hookups', 'xxx'].includes(room.id);
+              const canAccess = !isRestricted || isPremium;
 
-          <div className="space-y-1.5">
-            <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest px-1">My Fav 5 Rankings</p>
-            <div className="bg-white/5 border border-white/5 p-2 rounded-xl space-y-1">
-              {favFiveList.map((f) => (
-                <div key={f.id} className="flex items-center justify-between bg-slate-900/40 p-1.5 border border-white/5 rounded-lg text-[11px]"><p className="font-bold text-slate-300"><span className="text-pink-400 font-mono font-black mr-1">{f.rank}</span> {f.name}</p><span className="text-[8px] bg-pink-500/10 text-pink-400 font-black px-1 rounded">{f.rating}%</span></div>
-              ))}
-            </div>
+              const activeStyles = `
+                bg-gradient-to-r from-rose-500/10 to-purple-500/10 
+                border border-rose-500/20 text-rose-300
+              `;
+              const idleStyles = 'hover:bg-white/5 text-slate-400';
+
+              return (
+                <button
+                  key={room.id}
+                  onClick={() => canAccess && setActiveRoom(room.id)}
+                  className={`
+                    w-full text-left px-3 py-2 rounded-lg 
+                    flex items-center justify-between transition-all 
+                    ${activeRoom === room.id ? activeStyles : idleStyles} 
+                    ${!canAccess ? 'opacity-40 cursor-not-allowed' : ''}
+                  `}
+                >
+                  <span className="text-xs font-medium">{room.name}</span>
+                  {isRestricted && !isPremium && (
+                    <span className="text-[8px] bg-rose-500/20 text-rose-400 border border-rose-500/30 px-1.5 py-0.5 rounded font-black">
+                      VIP
+                    </span>
+                  )}
+                </button>
+              );
+            })}
           </div>
         </div>
 
-        <div className="pt-2">
-          <button type="button" onClick={() => { if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) { socketRef.current.send(JSON.stringify({ type: 'request_checkout' })); } }} className="w-full py-2.5 bg-gradient-to-r from-amber-500 via-rose-500 to-purple-600 text-white font-black text-xs rounded-xl uppercase shadow-md">⚡ Upgrade via Stripe</button>
-        </div>
-      </aside>
-
-      {/* CORE DISPLAY WINDOW CHAT WORKSPACE */}
-      <main className="flex-1 flex flex-col bg-gradient-to-b from-slate-950/40 to-transparent relative">
-        <header className="h-16 border-b border-white/5 flex items-center justify-between px-6 bg-slate-950/20">
-          <h2 className="font-bold text-xs text-slate-200 uppercase">{rooms.find(r => r.id === activeRoom)?.name}</h2>
-          {isVideoActive ? (
-            <button type="button" onClick={handleStopVideo} className="bg-rose-500/20 text-rose-400 border border-rose-500/30 px-3 py-1.5 rounded-lg text-xs font-bold animate-pulse">End Stream</button>
-          ) : (
-            <button type="button" onClick={handleStartVideo} className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-3 py-1.5 rounded-lg text-xs font-bold">Go Live (Video)</button>
+        {/* BOTTOM ACQUISITION MODULE */}
+        <div className="pt-4 border-t border-white/5 space-y-3">
+          {!isPremium && (
+            <button
+              onClick={handleUpgradeSubscription}
+              className="w-full py-2.5 bg-gradient-to-r from-amber-500 via-rose-500 to-purple-600 rounded-xl text-xs font-black text-white shadow-xl shadow-rose-950/30 tracking-wider uppercase"
+            >
+              👑 Unlock Premium VIP Vault
+            </button>
           )}
+          <div className="flex items-center justify-between px-1">
+            <span className="text-[10px] text-slate-500">Status: Secure Socket</span>
+            <button onClick={() => setIsAccountPaused(!isAccountPaused)} className="text-[10px] text-slate-400 underline">
+              {isAccountPaused ? "Resume Pipeline" : "Incognito Pause"}
+            </button>
+          </div>
+        </div>
+      </aside>      {/* CORE DISPLAY AND CHAT MATRIX */}
+      <main className="flex-1 flex flex-col bg-slate-950">
+        <header className="h-14 border-b border-white/5 px-4 flex items-center justify-between bg-slate-950/40 backdrop-blur-md">
+          <div>
+            <h2 className="text-xs font-bold text-slate-200">Arena: {rooms.find(r => r.id === activeRoom)?.name}</h2>
+            <p className="text-[10px] text-slate-500">Transport Layer Encrypted</p>
+          </div>
+          <div className="flex items-center gap-2">
+            {isVideoActive ? (
+              <button onClick={handleStopVideo} className="px-2.5 py-1 bg-rose-600 text-white font-bold rounded text-[10px]">Kill Cam</button>
+            ) : (
+              <button onClick={handleStartVideo} className="px-2.5 py-1 bg-white/5 hover:bg-white/10 text-slate-300 font-bold border border-white/10 rounded text-[10px]">Go Live</button>
+            )}
+          </div>
         </header>
 
-        {isVideoActive && (
-          <div className="p-4 bg-slate-950/60 border-b border-white/5 flex justify-center">
-            <div className="w-64 h-36 bg-slate-900 border border-rose-500/30 rounded-xl overflow-hidden relative shadow-lg"><video ref={localVideoRef} autoPlay playsInline muted className="w-full h-full object-cover transform -scale-x-100" /><span className="absolute bottom-1.5 left-1.5 text-[8px] bg-black/60 px-1.5 py-0.2 rounded text-white tracking-widest font-black">LOCAL STREAM</span></div>
-          </div>
-        )}
-
-        <div className="grid grid-cols-2 gap-3 mx-6 mt-3">
-          <div className="bg-white/5 border border-white/5 p-2 rounded-xl flex items-center justify-between text-[11px] gap-2">
-            <div className="min-w-0"><p className="text-[8px] text-pink-400 font-black uppercase tracking-widest">Icebreaker Module</p><p className="text-slate-300 italic truncate font-medium">"{gameQuestion}"</p></div>
-            <div className="flex gap-1 shrink-0">
-              <button type="button" onClick={() => setGameQuestion(questionsList[Math.floor(Math.random() * questionsList.length)])} className="bg-white/5 px-2 py-1 rounded-lg border text-[9px] uppercase font-bold">Draw</button>
-              <button type="button" onClick={handleRollDice} className="bg-pink-500/10 text-pink-400 px-2 py-1 rounded-lg border border-pink-500/20 text-[9px] font-black uppercase">Dice</button>
-            </div>
-          </div>
-          <div className="bg-white/5 border border-white/5 p-2 rounded-xl flex items-center justify-between text-[11px]">
-            <div><p className="text-[8px] text-amber-400 font-black uppercase tracking-widest">🏆 Algorithmic Catch of the Day</p><p className="text-slate-200 font-bold">💖 {catchOfTheDay.name} <span className="text-slate-500 font-normal">({catchOfTheDay.matchScore}%)</span></p></div>
-            <span className="text-[8px] bg-amber-500/10 text-amber-400 px-2 py-1 rounded border border-amber-500/20 uppercase font-mono font-bold shrink-0">{catchOfTheDay.sharedInterest}</span>
-          </div>
-        </div>
-
-        <div className="flex-1 p-6 space-y-4 overflow-y-auto">
+        {/* CHAT THREAD FEED */}
+        <div className="flex-1 p-4 overflow-y-auto space-y-3">
           {messages.map((msg, idx) => (
-            <div key={idx} className={`flex gap-3 max-w-xl ${msg.user === username ? 'ml-auto flex-row-reverse' : ''}`}>
-              <img onClick={() => setSelectedUser(msg)} src={msg.photoUrl || `https://dicebear.com{msg.user}`} alt="Avatar" className="w-8 h-8 rounded-full object-cover border border-white/5 mt-0.5 shrink-0 cursor-pointer hover:border-pink-500 transition-colors" />
-              <div className={`border rounded-2xl px-4 py-2 text-xs ${msg.user === username ? 'bg-purple-500/10 border-purple-500/20 rounded-tr-none' : 'bg-white/5 border-white/5 rounded-tl-none'}`}>
-                <div className="flex items-center gap-2 mb-0.5"><p className="font-bold text-slate-200">{msg.user}</p><span className="text-[7px] bg-pink-500/10 text-pink-400 px-1 rounded uppercase font-mono">{msg.intent || 'Mingling'}</span></div>
-                <p className="text-slate-300 text-xs leading-relaxed">{msg.text}</p>
+            <div key={idx} className={`flex flex-col ${msg.user === username ? 'items-end' : 'items-start'}`}>
+              <div className={`max-w-[70%] p-2.5 rounded-xl text-xs ${
+                msg.user === username 
+                  ? 'bg-gradient-to-br from-purple-600 to-indigo-700 text-white rounded-tr-none' 
+                  : 'bg-white/5 text-slate-200 border border-white/5 rounded-tl-none'
+              }`}>
+                <span className="block text-[8px] font-bold text-slate-400 mb-0.5">{msg.user}</span>
+                <p className="leading-relaxed">{msg.text}</p>
               </div>
             </div>
           ))}
           <div ref={chatEndRef} />
         </div>
 
-        {/* INPUT COMPOSER FOR WRITING WHISPERS */}
-        <form onSubmit={handleSendMessage} className="p-6 pt-0">
-          <div className="bg-slate-900/40 border border-white/5 rounded-xl px-4 py-3 flex items-center gap-3">
-            <input 
-              type="text" 
-              value={inputValue} 
-              disabled={isAccountPaused} 
-              onChange={(e) => setInputValue(e.target.value)} 
-              placeholder={isAccountPaused ? "Account paused..." : "Type an incognito whisper to the pool..."} 
-              className="bg-transparent flex-1 text-sm outline-none text-slate-100" 
-            />
-            <button type="submit" className="text-xs font-black text-pink-400 uppercase tracking-wider px-2">Send</button>
+        {/* VIDEO PREVIEW PILL */}
+        {isVideoActive && (
+          <div className="absolute bottom-20 right-76 w-40 h-28 rounded-lg overflow-hidden border border-white/10 bg-black shadow-2xl z-50">
+            <video ref={localVideoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
           </div>
+        )}
+
+        {/* CONSOLE INPUT ROW */}
+        <form onSubmit={handleSendMessage} className="p-4 border-t border-white/5 bg-slate-950/60 flex gap-2">
+          <input 
+            type="text" 
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+            disabled={isAccountPaused}
+            placeholder={isAccountPaused ? "Pipeline paused..." : `Message ${rooms.find(r => r.id === activeRoom)?.name}...`}
+            className="flex-1 bg-white/5 border border-white/5 rounded-xl px-4 py-2 text-xs outline-none focus:border-rose-500/40 text-slate-100"
+          />
+          <button type="submit" disabled={isAccountPaused} className="px-4 py-2 bg-gradient-to-r from-rose-500 to-purple-600 font-bold rounded-xl text-xs uppercase text-white shadow-lg">
+            Send
+          </button>
         </form>
       </main>
 
-      {/* DISCOVERY PROFILE PREVIEW OVERLAY POPUP */}
-      {selectedUser && (
-        <div className="absolute inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 z-50">
-          <div className="max-w-sm w-full bg-[#0a0d14] border border-white/10 p-5 rounded-3xl relative shadow-2xl space-y-4">
-            <button type="button" onClick={() => setSelectedUser(null)} className="absolute top-4 right-4 w-6 h-6 bg-white/5 border border-white/10 rounded-full text-xs text-slate-400 flex items-center justify-center">✕</button>
-            <div className="flex items-center gap-2">
-              <span className="w-1.5 h-1.5 rounded-full bg-pink-400 animate-ping" />
-              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">{selectedUser.user}'s Vetted Book</h3>
+      {/* GAMIFIED INTERACTIONS PANEL */}
+      <aside className="w-72 border-l border-white/5 bg-slate-950/40 p-4 flex flex-col justify-between overflow-y-auto shrink-0 space-y-4">
+        <div className="space-y-4">
+          <div className="bg-gradient-to-br from-purple-950/30 to-slate-950 border border-purple-500/10 p-3 rounded-xl space-y-2">
+            <span className="text-[9px] font-black text-purple-400 uppercase tracking-widest block">👑 Algorithmic Catch</span>
+            <div className="flex justify-between items-center text-xs">
+              <span className="font-bold text-white">{catchOfTheDay.name}</span>
+              <span className="text-rose-400 font-black">{catchOfTheDay.matchScore}% Match</span>
             </div>
-            
-            <div className="grid grid-cols-2 gap-2">
-              {galleryPhotos.map((src, i) => (
-                <div key={i} className="h-28 bg-slate-900 rounded-xl overflow-hidden border border-white/5">
-                  <img src={src} alt="Gallery Grid" className="w-full h-full object-cover" />
-                </div>
-              ))}
-            </div>
+            <p className="text-[10px] text-slate-400">Aligned on: <span className="text-slate-200">{catchOfTheDay.sharedInterest}</span></p>
+          </div>
 
-            <div className="bg-white/5 border border-white/5 p-3 rounded-xl space-y-2.5 text-[11px]">
-              <div className="flex justify-between border-b border-white/5 pb-2">
-                <button type="button" onClick={() => alert("Liked user!")} className="bg-rose-500/10 text-rose-400 px-3 py-1 rounded-lg font-bold border border-rose-500/20 text-[9px] uppercase">🔥 Like</button>
-                <button type="button" onClick={() => handleBlockUser(selectedUser.user)} className="bg-red-500/10 text-red-400 px-3 py-1 rounded-lg font-bold border border-red-500/20 text-[9px] uppercase">🚫 Block</button>
-              </div>
-              <p className="text-slate-400 italic">"Verified photo identity matching profile match."</p>
-            </div>
+          <div className="bg-white/5 border border-white/5 p-3 rounded-xl space-y-3">
+            <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">🎲 Icebreaker Matrix</span>
+            <p className="text-[11px] text-slate-300 italic min-h-[32px]">"{gameQuestion}"</p>
+            <button type="button" onClick={handleRollDice} className="w-full py-1 bg-white/5 hover:bg-white/10 border border-white/10 text-white rounded text-[10px] font-bold">
+              Roll Dice
+            </button>
           </div>
         </div>
-      )}
+        <div className="text-[9px] text-slate-600 text-center leading-normal">
+          Encrypted Transport Layer • Active Enforcements Active
+        </div>
+      </aside>
+
     </div>
   );
 }
+
