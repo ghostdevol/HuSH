@@ -1,16 +1,49 @@
-
 const WebSocket = require('ws');
 const fs = require('fs');
 const path = require('path');
 
-// 💳 INITIALIZE STRIPE: Paste your real sk_test_ token inside the quotes below!
-const stripe = require('stripe')('sk_test_PASTE_YOUR_STRIPE_SECRET_KEY_HERE');
+// 💳 INITIALIZE STRIPE WITH APIS (Swap with your real sk_test_ token later)
+const stripe = require('stripe')('sk_test_placeholder_key_replace_me');
 
 const MESSAGES_FILE = path.join(__dirname, 'data', 'messages.json');
 const wss = new WebSocket.Server({ port: 5174 });
-const connectedProfiles = new Map();
+const connectedProfiles = new Map(); 
 
-console.log('🔥 HuSH Dating Engine with Live Video active on port 5174');
+console.log('💘 HuSH Premium Stripe Dating Engine online on port 5174');
+
+/**
+ * 🔒 STRIPE CHECKOUT UTILITY ROUTE ENGINE
+ * Creates a unique, encrypted gateway checkout link for the dater session
+ */
+function createStripeCheckoutSession(userId) {
+  return new Promise((resolve) => {
+    stripe.checkout.sessions.create({
+      payment_method_types: ['card'],
+      line_items: [{
+        price_data: {
+          currency: 'usd',
+          product_data: {
+            name: 'HuSH Elite VIP Pass',
+            description: 'Unlock infinite streams, private direct messaging, and adult chambers.',
+          },
+          unit_amount: 499, // $4.99 in cents
+          recurring: { interval: 'month' },
+        },
+        quantity: 1,
+      }],
+      mode: 'subscription',
+      // Dynamic callbacks when user finishes or closes the payment panel
+      success_url: 'http://localhost:5173/?payment=success',
+      cancel_url: 'http://localhost:5173/?payment=cancelled',
+      client_reference_id: userId, // Ties transaction directly back to this specific ghost user
+    })
+    .then(session => resolve({ success: true, url: session.url }))
+    .catch(err => {
+      console.error('Stripe billing generation failed:', err);
+      resolve({ success: false, error: 'Billing gateway temporarily locked.' });
+    });
+  });
+}
 
 function loadMessageHistory() {
   try {
@@ -35,13 +68,27 @@ wss.on('connection', (ws) => {
     try {
       const parsedData = JSON.parse(data);
 
-      // 1. SYNC COMPREHENSIVE DATING PROFILE
+      // 1. PROCESS STRIPE LIVE SUBSCRIPTION GATEWAY REQUESTS
+      if (parsedData.type === 'request_checkout') {
+        console.log(`Generating checkout token link for connection session: ${ws.userId}`);
+        createStripeCheckoutSession(ws.userId).then(result => {
+          ws.send(JSON.stringify({
+            type: 'checkout_url_generated',
+            success: result.success,
+            url: result.url,
+            error: result.error
+          }));
+        });
+        return;
+      }
+
+      // 2. PROFILE MANIFEST RECONCILIATIONS
       if (parsedData.type === 'update_profile') {
         ws.username = parsedData.username || ws.userId;
         ws.gender = parsedData.gender || 'Not Specified';
         ws.intent = parsedData.intent || 'Mingling';
         ws.bio = parsedData.bio || '';
-        ws.photoUrl = parsedData.photoUrl || `https://dicebear.com{ws.userId}`;
+        ws.photoUrl = parsedData.photoUrl || '';
 
         connectedProfiles.set(ws.userId, {
           userId: ws.userId,
@@ -52,35 +99,23 @@ wss.on('connection', (ws) => {
           photoUrl: ws.photoUrl,
           isPremium: ws.isPremium
         });
-
-        ws.send(JSON.stringify({ type: 'profile_synced', userId: ws.userId, photoUrl: ws.photoUrl }));
         return;
       }
 
-      // 2. ROUTE AUDIO/VIDEO STREAM SIGNALS (WEBRTC HANDSHAKE)
-      if (parsedData.type === 'video_signal') {
-        // Broadcast the webcam stream handshake to the target dater
-        wss.clients.forEach((client) => {
-          if (client.readyState === WebSocket.OPEN && client.userId !== ws.userId) {
-            client.send(JSON.stringify({
-              type: 'video_signal',
-              senderId: ws.userId,
-              senderName: ws.username,
-              signal: parsedData.signal
-            }));
-          }
-        });
-        return;
-      }
-
-      // 3. STANDARD CHAT ROOM ROUTING
+      // 3. SECURE CHAMBER ACCESS RULES GATE
       if (parsedData.type === 'join') {
+        const isPremiumRoom = parsedData.room === 'vip' || parsedData.room === 'xxx';
+        if (isPremiumRoom && !ws.isPremium) {
+          ws.send(JSON.stringify({ type: 'access_denied', room: parsedData.room }));
+          return;
+        }
         ws.currentRoom = parsedData.room;
         const history = loadMessageHistory().filter(msg => msg.room === ws.currentRoom);
         ws.send(JSON.stringify({ type: 'history', messages: history }));
         return;
       }
 
+      // 4. BI-DIRECTIONAL ROUTING ENGINE LOGS
       if (parsedData.type === 'message') {
         const outMessage = {
           type: 'message',
