@@ -1,61 +1,106 @@
-const http = require("http");
-const fs = require("fs");
-const path = require("path");
-const WebSocket = require("ws");
 
-const roomsFile = path.join(__dirname, "data", "rooms.json");
-if (!fs.existsSync(roomsFile)) fs.writeFileSync(roomsFile, "{}");
+const WebSocket = require('ws');
+const fs = require('fs');
+const path = require('path');
 
-const server = http.createServer((req, res) => {
-  if (req.method === "POST" && req.url === "/createRoom") {
-    let body = "";
-    req.on("data", chunk => body += chunk);
-    req.on("end", () => {
-      const {room} = JSON.parse(body);
-      const rooms = JSON.parse(fs.readFileSync(roomsFile));
-      rooms[room] = rooms[room] || [];
-      fs.writeFileSync(roomsFile, JSON.stringify(rooms));
-      res.end("Room created");
-    });
-    return;
-  }
+// 💳 INITIALIZE STRIPE: Paste your real sk_test_ token inside the quotes below!
+const stripe = require('stripe')('sk_test_PASTE_YOUR_STRIPE_SECRET_KEY_HERE');
 
-  let filePath = path.join(__dirname, "..", "public", req.url === "/" ? "index.html" : req.url);
-  const ext = path.extname(filePath);
-  const types = {
-    ".html":"text/html",".css":"text/css",".js":"application/javascript"
-  };
+const MESSAGES_FILE = path.join(__dirname, 'data', 'messages.json');
+const wss = new WebSocket.Server({ port: 5174 });
+const connectedProfiles = new Map();
 
-  fs.readFile(filePath, (err, content) => {
-    if (err) {res.writeHead(404);return res.end("404");}
-    res.writeHead(200, {"Content-Type": types[ext] || "text/plain"});
-    res.end(content);
+console.log('🔥 HuSH Dating Engine with Live Video active on port 5174');
+
+function loadMessageHistory() {
+  try {
+    if (!fs.existsSync(MESSAGES_FILE)) return [];
+    const data = fs.readFileSync(MESSAGES_FILE, 'utf8');
+    return JSON.parse(data || '[]');
+  } catch { return []; }
+}
+
+function saveMessageToHistory(msg) {
+  try {
+    const history = loadMessageHistory();
+    history.push(msg);
+    fs.writeFileSync(MESSAGES_FILE, JSON.stringify(history, null, 2));
+  } catch (err) { console.error(err); }
+}
+wss.on('connection', (ws) => {
+  ws.isPremium = false;
+  ws.userId = `ghost_${Math.floor(100 + Math.random() * 900)}`;
+
+  ws.on('message', function incoming(data) {
+    try {
+      const parsedData = JSON.parse(data);
+
+      // 1. SYNC COMPREHENSIVE DATING PROFILE
+      if (parsedData.type === 'update_profile') {
+        ws.username = parsedData.username || ws.userId;
+        ws.gender = parsedData.gender || 'Not Specified';
+        ws.intent = parsedData.intent || 'Mingling';
+        ws.bio = parsedData.bio || '';
+        ws.photoUrl = parsedData.photoUrl || `https://dicebear.com{ws.userId}`;
+
+        connectedProfiles.set(ws.userId, {
+          userId: ws.userId,
+          username: ws.username,
+          gender: ws.gender,
+          intent: ws.intent,
+          bio: ws.bio,
+          photoUrl: ws.photoUrl,
+          isPremium: ws.isPremium
+        });
+
+        ws.send(JSON.stringify({ type: 'profile_synced', userId: ws.userId, photoUrl: ws.photoUrl }));
+        return;
+      }
+
+      // 2. ROUTE AUDIO/VIDEO STREAM SIGNALS (WEBRTC HANDSHAKE)
+      if (parsedData.type === 'video_signal') {
+        // Broadcast the webcam stream handshake to the target dater
+        wss.clients.forEach((client) => {
+          if (client.readyState === WebSocket.OPEN && client.userId !== ws.userId) {
+            client.send(JSON.stringify({
+              type: 'video_signal',
+              senderId: ws.userId,
+              senderName: ws.username,
+              signal: parsedData.signal
+            }));
+          }
+        });
+        return;
+      }
+
+      // 3. STANDARD CHAT ROOM ROUTING
+      if (parsedData.type === 'join') {
+        ws.currentRoom = parsedData.room;
+        const history = loadMessageHistory().filter(msg => msg.room === ws.currentRoom);
+        ws.send(JSON.stringify({ type: 'history', messages: history }));
+        return;
+      }
+
+      if (parsedData.type === 'message') {
+        const outMessage = {
+          type: 'message',
+          room: parsedData.room,
+          user: ws.username || parsedData.user,
+          photoUrl: ws.photoUrl,
+          gender: ws.gender || '?',
+          intent: ws.intent || 'Mingling',
+          text: parsedData.text,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        };
+        saveMessageToHistory(outMessage);
+        wss.clients.forEach((client) => {
+          if (client.readyState === WebSocket.OPEN && client.currentRoom === parsedData.room) {
+            client.send(JSON.stringify(outMessage));
+          }
+        });
+      }
+    } catch (err) { console.error(err); }
   });
+
+  ws.on('close', () => { connectedProfiles.delete(ws.userId); });
 });
-
-const wss = new WebSocket.Server({port:5174});
-const clients = {};
-
-wss.on("connection", ws => {
-  ws.on("message", msg => {
-    const data = JSON.parse(msg);
-
-    if (data.type === "join") {
-      ws.room = data.room;
-      clients[ws.room] = clients[ws.room] || [];
-      clients[ws.room].push(ws);
-    }
-
-    if (data.type === "msg") {
-      clients[data.room].forEach(client => {
-        client.send(JSON.stringify({
-          user:"User",
-          text:data.text
-        }));
-      });
-    }
-  });
-});
-
-server.listen(5173, () => console.log("HuSH HTTP running on 5173"));
-console.log("HuSH WebSocket running on 5174");
