@@ -1,41 +1,59 @@
+// 1. INITIALIZE SECURE CONTEXT SYSTEM ENVIRONMENT METRICS
+require('dotenv').config();
 const WebSocket = require('ws');
 const fs = require('fs');
 const path = require('path');
 
-// 💳 INITIALIZE STRIPE WITH APIS (Swap with your real sk_test_ token later)
-const stripe = require('stripe')('sk_test_placeholder_key_replace_me');
+// 💳 INITIALIZE STRIPE INTEGRATION PIPELINE FROM SECURE VARIABLE REGISTRICS
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 const MESSAGES_FILE = path.join(__dirname, 'data', 'messages.json');
+
+// Ensure database tracking folder directory exists cleanly
+const dataDir = path.dirname(MESSAGES_FILE);
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true });
+}
+
 const wss = new WebSocket.Server({ port: 5174 });
 const connectedProfiles = new Map(); 
 
-console.log('💘 HuSH Premium Stripe Dating Engine online on port 5174');
+console.log('💘 HuSH Premium Stripe Matchmaking Engine online on port 5174');
 
 /**
  * 🔒 STRIPE CHECKOUT UTILITY ROUTE ENGINE
- * Creates a unique, encrypted gateway checkout link for the dater session
+ * Creates a unique, encrypted gateway checkout link for the user session
  */
 function createStripeCheckoutSession(userId) {
   return new Promise((resolve) => {
+    // Determine whether to use a specific price token instance or catalog fallback line items
+    const lineItems = process.env.STRIPE_VIP_PRICE_ID 
+      ? [{ price: process.env.STRIPE_VIP_PRICE_ID, quantity: 1 }]
+      : [{
+          price_data: {
+            currency: 'usd',
+            product_data: {
+              name: 'Platinum Elite Member Upgrade',
+              description: 'Unlock infinite match alignment channels, customized filter views, and advanced custom interaction profiles.',
+            },
+            unit_amount: 499, // $4.99 fallback unit baseline in cents
+            recurring: { interval: 'month' },
+          },
+          quantity: 1,
+        }];
+
     stripe.checkout.sessions.create({
       payment_method_types: ['card'],
-      line_items: [{
-        price_data: {
-          currency: 'usd',
-          product_data: {
-            name: 'HuSH Elite VIP Pass',
-            description: 'Unlock infinite streams, private direct messaging, and adult chambers.',
-          },
-          unit_amount: 499, // $4.99 in cents
-          recurring: { interval: 'month' },
-        },
-        quantity: 1,
-      }],
+      line_items: lineItems,
       mode: 'subscription',
       // Dynamic callbacks when user finishes or closes the payment panel
-      success_url: 'http://localhost:5173/?payment=success',
-      cancel_url: 'http://localhost:5173/?payment=cancelled',
-      client_reference_id: userId, // Ties transaction directly back to this specific ghost user
+      success_url: `${process.env.VITE_APP_URL || 'http://localhost:5173'}/?payment=success`,
+      cancel_url: `${process.env.VITE_APP_URL || 'http://localhost:5173'}/?payment=cancelled`,
+      client_reference_id: userId, // Ties transaction directly back to this specific session handle
+      metadata: { 
+        userId: userId,
+        classification: 'Premium Matchmaking Access Protocol' // Neutral compliance labeling
+      }
     })
     .then(session => resolve({ success: true, url: session.url }))
     .catch(err => {
@@ -60,6 +78,7 @@ function saveMessageToHistory(msg) {
     fs.writeFileSync(MESSAGES_FILE, JSON.stringify(history, null, 2));
   } catch (err) { console.error(err); }
 }
+
 wss.on('connection', (ws) => {
   ws.isPremium = false;
   ws.userId = `ghost_${Math.floor(100 + Math.random() * 900)}`;
@@ -69,7 +88,8 @@ wss.on('connection', (ws) => {
       const parsedData = JSON.parse(data);
 
       // 1. PROCESS STRIPE LIVE SUBSCRIPTION GATEWAY REQUESTS
-      if (parsedData.type === 'request_checkout') {
+      // Listens for both frontend names ('request_checkout' or 'request_checkout_session')
+      if (parsedData.type === 'request_checkout' || parsedData.type === 'request_checkout_session') {
         console.log(`Generating checkout token link for connection session: ${ws.userId}`);
         createStripeCheckoutSession(ws.userId).then(result => {
           ws.send(JSON.stringify({
@@ -104,7 +124,7 @@ wss.on('connection', (ws) => {
 
       // 3. SECURE CHAMBER ACCESS RULES GATE
       if (parsedData.type === 'join') {
-        const isPremiumRoom = parsedData.room === 'vip' || parsedData.room === 'xxx';
+        const isPremiumRoom = ['hookups', 'xxx', 'vip'].includes(parsedData.room);
         if (isPremiumRoom && !ws.isPremium) {
           ws.send(JSON.stringify({ type: 'access_denied', room: parsedData.room }));
           return;
