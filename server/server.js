@@ -1,13 +1,18 @@
 // 1. INITIALIZE SECURE CONTEXT SYSTEM ENVIRONMENT METRICS
-require('dotenv').config();
-const WebSocket = require('ws');
-const fs = require('fs');
-const path = require('path');
+import 'dotenv/config';
+import { WebSocketServer } from 'ws';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import Stripe from 'stripe';
+
+// Emulate __dirname behavior needed for ES modules paths resolution
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // 💳 INITIALIZE STRIPE INTEGRATION PIPELINE FROM SECURE VARIABLE REGISTRIES
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
-// FIXED: Removed 'data' from the lookup path because messages.json is right next to server.js
 const MESSAGES_FILE = path.join(__dirname, 'messages.json');
 
 // Ensure database tracking file permissions resolve cleanly inside the server directory
@@ -18,7 +23,8 @@ if (!fs.existsSync(dataDir)) {
 
 // 🌐 USE PORT ASSIGNED BY CLOUD ROUTER IN PRODUCTION, OR FALLBACK TO 5174 LOCALLY
 const PORT = process.env.PORT || 5174;
-const wss = new WebSocket.Server({ port: PORT });
+// Update this line to use your new import reference
+const wss = new WebSocketServer({ port: PORT });
 const connectedProfiles = new Map(); 
 
 console.log(`💘 HuSH Premium Stripe Matchmaking Engine online on port ${PORT}`);
