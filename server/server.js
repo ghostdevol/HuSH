@@ -1,6 +1,6 @@
 // 1. INITIALIZE SECURE CONTEXT SYSTEM ENVIRONMENT METRICS
 import 'dotenv/config';
-import { WebSocketServer } from 'ws';
+import { WebSocketServer, WebSocket } from 'ws';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -13,9 +13,10 @@ const __dirname = path.dirname(__filename);
 // 💳 INITIALIZE STRIPE INTEGRATION PIPELINE FROM SECURE VARIABLE REGISTRIES
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
+// Points directly to messages.json sitting next to server.js
 const MESSAGES_FILE = path.join(__dirname, 'messages.json');
 
-// Ensure database tracking file permissions resolve cleanly inside the server directory
+// Ensure database tracking folder directory exists cleanly
 const dataDir = path.dirname(MESSAGES_FILE);
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
@@ -23,7 +24,6 @@ if (!fs.existsSync(dataDir)) {
 
 // 🌐 USE PORT ASSIGNED BY CLOUD ROUTER IN PRODUCTION, OR FALLBACK TO 5174 LOCALLY
 const PORT = process.env.PORT || 5174;
-// Update this line to use your new import reference
 const wss = new WebSocketServer({ port: PORT });
 const connectedProfiles = new Map(); 
 
@@ -31,11 +31,9 @@ console.log(`💘 HuSH Premium Stripe Matchmaking Engine online on port ${PORT}`
 
 /**
  * 🔒 STRIPE CHECKOUT UTILITY ROUTE ENGINE
- * Creates a unique, encrypted gateway checkout link for the user session
  */
 function createStripeCheckoutSession(userId) {
   return new Promise((resolve) => {
-    // Determine whether to use a specific price token instance or catalog fallback line items
     const lineItems = process.env.STRIPE_VIP_PRICE_ID 
       ? [{ price: process.env.STRIPE_VIP_PRICE_ID, quantity: 1 }]
       : [{
@@ -45,7 +43,7 @@ function createStripeCheckoutSession(userId) {
               name: 'Platinum Elite Member Upgrade',
               description: 'Unlock infinite match alignment channels, customized filter views, and advanced custom interaction profiles.',
             },
-            unit_amount: 499, // $4.99 fallback unit baseline in cents
+            unit_amount: 499,
             recurring: { interval: 'month' },
           },
           quantity: 1,
@@ -55,13 +53,12 @@ function createStripeCheckoutSession(userId) {
       payment_method_types: ['card'],
       line_items: lineItems,
       mode: 'subscription',
-      // Dynamic callbacks when user finishes or closes the payment panel
       success_url: `${process.env.VITE_APP_URL || 'http://localhost:5173'}/?payment=success`,
       cancel_url: `${process.env.VITE_APP_URL || 'http://localhost:5173'}/?payment=cancelled`,
-      client_reference_id: userId, // Ties transaction directly back to this specific session handle
+      client_reference_id: userId,
       metadata: { 
         userId: userId,
-        classification: 'Premium Matchmaking Access Protocol' // Neutral compliance labeling
+        classification: 'Premium Matchmaking Access Protocol'
       }
     })
     .then(session => resolve({ success: true, url: session.url }))
