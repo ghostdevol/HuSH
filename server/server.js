@@ -4,7 +4,7 @@ const WebSocket = require('ws');
 const fs = require('fs');
 const path = require('path');
 
-// 💳 INITIALIZE STRIPE INTEGRATION PIPELINE FROM SECURE VARIABLE REGISTRICS
+// 💳 INITIALIZE STRIPE INTEGRATION PIPELINE FROM SECURE VARIABLE REGISTRIES
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
 const MESSAGES_FILE = path.join(__dirname, 'data', 'messages.json');
@@ -15,10 +15,12 @@ if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }
 
-const wss = new WebSocket.Server({ port: 5174 });
+// 🌐 USE PORT ASSIGNED BY CLOUD ROUTER IN PRODUCTION, OR FALLBACK TO 5174 LOCALLY
+const PORT = process.env.PORT || 5174;
+const wss = new WebSocket.Server({ port: PORT });
 const connectedProfiles = new Map(); 
 
-console.log('💘 HuSH Premium Stripe Matchmaking Engine online on port 5174');
+console.log(`💘 HuSH Premium Stripe Matchmaking Engine online on port ${PORT}`);
 
 /**
  * 🔒 STRIPE CHECKOUT UTILITY ROUTE ENGINE
@@ -88,7 +90,6 @@ wss.on('connection', (ws) => {
       const parsedData = JSON.parse(data);
 
       // 1. PROCESS STRIPE LIVE SUBSCRIPTION GATEWAY REQUESTS
-      // Listens for both frontend names ('request_checkout' or 'request_checkout_session')
       if (parsedData.type === 'request_checkout' || parsedData.type === 'request_checkout_session') {
         console.log(`Generating checkout token link for connection session: ${ws.userId}`);
         createStripeCheckoutSession(ws.userId).then(result => {
