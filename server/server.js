@@ -7,9 +7,10 @@ const path = require('path');
 // 💳 INITIALIZE STRIPE INTEGRATION PIPELINE FROM SECURE VARIABLE REGISTRIES
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 
-const MESSAGES_FILE = path.join(__dirname, 'data', 'messages.json');
+// FIXED: Removed 'data' from the lookup path because messages.json is right next to server.js
+const MESSAGES_FILE = path.join(__dirname, 'messages.json');
 
-// Ensure database tracking folder directory exists cleanly
+// Ensure database tracking file permissions resolve cleanly inside the server directory
 const dataDir = path.dirname(MESSAGES_FILE);
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
