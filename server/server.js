@@ -23,11 +23,18 @@ if (!fs.existsSync(dataDir)) {
 }
 
 // 🌐 USE PORT ASSIGNED BY CLOUD ROUTER IN PRODUCTION, OR FALLBACK TO 5174 LOCALLY
-const PORT = process.env.PORT || 5174;
-const wss = new WebSocketServer({ port: PORT });
-const connectedProfiles = new Map(); 
 
-console.log(`💘 HuSH Premium Stripe Matchmaking Engine online on port ${PORT}`);
+const connectedProfiles = new Map(); import http from 'http';
+import express from 'express';
+
+const app = express();
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server });
+
+const PORT = process.env.PORT || 5174;
+server.listen(PORT, () => {
+  console.log(`💘 HuSH Premium Stripe Matchmaking Engine online on port ${PORT}`);
+});
 
 /**
  * 🔒 STRIPE CHECKOUT UTILITY ROUTE ENGINE
