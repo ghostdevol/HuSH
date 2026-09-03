@@ -4,9 +4,9 @@
   "version": "1.0.0",
   "type": "module",
   "engines": {
-  "node": "20.x",
+  "node": "24.x",
   "npm": "11.x"
-},
+
 
   "scripts": {
     "dev": "vite",
@@ -24,7 +24,7 @@
     "@vitejs/plugin-react-swc": "^3.5.0",
     "autoprefixer": "^10.4.19",
     "eslint": "^8.57.0",
-    "eslint-plugin-react": "^8.33.0",
+    "eslint-plugin-react": "^7.33.2",
     "eslint-plugin-react-hooks": "^4.6.0",
     "eslint-plugin-react-refresh": "^0.4.6",
     "postcss": "^8.4.38",
