@@ -18,47 +18,20 @@ app.post('/createRoom', (req, res) => {
     res.json({ success: true, rooms: Array.from(rooms) });
 });
 
-// Start HTTP server on port 3000
-const server = app.listen(3000, () => {
-    console.log('HTTP Server running on http://localhost:3000');
-});
+const express = require('express');
+const { WebSocketServer } = require('ws');
+const http = require('http');
 
-// 2. WebSocket Server (Matching your port 5174)
-const wss = new WebSocketServer({ port: 5174 });
-console.log('WebSocket Server running on ws://localhost:5174');
+const app = express();
+app.use(express.json());
+app.use(express.static('public'));
 
-wss.on('connection', (ws) => {
-    // Attach a room tracking property directly to this client's socket
-    ws.currentRoom = null;
+const PORT = process.env.PORT || 3000;
 
-    ws.on('message', (message) => {
-        try {
-            const data = JSON.parse(message);
+// ONE server for HTTP + WS
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server });
 
-            // Handle joining a room
-            if (data.type === 'join') {
-                ws.currentRoom = data.room;
-                console.log(`A user joined room: ${data.room}`);
-            }
-
-            // Handle broadcasting messages to everyone in the SAME room
-            if (data.type === 'msg' && ws.currentRoom) {
-                wss.clients.forEach((client) => {
-                    // Only send to clients who are open AND in the matching room
-                    if (client.readyState === 1 && client.currentRoom === ws.currentRoom) {
-                        client.send(JSON.stringify({
-                            user: "User", // You can expand this later to use real usernames
-                            text: data.text
-                        }));
-                    }
-                });
-            }
-        } catch (err) {
-            console.error('Error parsing WS message:', err);
-        }
-    });
-
-    ws.on('close', () => {
-        console.log('User disconnected');
-    });
+server.listen(PORT, () => {
+  console.log(`Server + WebSocket running on port ${PORT}`);
 });

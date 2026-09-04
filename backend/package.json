@@ -1,0 +1,17 @@
+{
+  "name": "hush-backend",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "type": "commonjs",
+  "engines": {
+    "node": "18.x"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.22.2",
+    "ws": "^8.21.3"
+  }
+}
