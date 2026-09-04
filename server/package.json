@@ -1,15 +1,17 @@
 {
   "name": "hush-backend",
   "version": "1.0.0",
-  "type": "module",
+  "private": true,
   "main": "server.js",
+  "type": "commonjs",
+  "engines": {
+    "node": "18.x"
+  },
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "dotenv": "^16.4.5",
-    "express": "^5.2.1",
-    "stripe": "^14.25.0",
-    "ws": "^8.16.0"
+    "express": "^4.22.2",
+    "ws": "^8.21.3"
   }
 }
