@@ -1,0 +1,54 @@
+:root {
+  --bg: #050505;
+  --text: #fefefe;
+  --accent1: #00ffff;
+  --accent2: #ff00ff;
+  --accent3: #ffcc00;
+}
+
+body {
+  margin: 0;
+  background: radial-gradient(circle at 20% 20%, #0a0a0a, #000);
+  color: var(--text);
+  font-family: 'Orbitron', sans-serif;
+  letter-spacing: 0.6px;
+  text-shadow: 0 0 8px var(--accent2);
+}
+
+h1, h2, h3 {
+  color: var(--accent1);
+  text-shadow: 0 0 12px var(--accent2), 0 0 24px var(--accent1);
+}
+
+button, input, select {
+  background: transparent;
+  border: 1px solid var(--accent1);
+  color: var(--text);
+  padding: 6px 12px;
+  border-radius: 6px;
+  transition: all 0.3s ease;
+}
+
+button:hover, input:focus, select:focus {
+  box-shadow: 0 0 12px var(--accent2), 0 0 24px var(--accent1);
+  outline: none;
+}
+
+a {
+  color: var(--accent3);
+  text-decoration: none;
+  text-shadow: 0 0 6px var(--accent3);
+}
+
+a:hover {
+  color: var(--accent1);
+  text-shadow: 0 0 12px var(--accent2);
+}
+
+.container, .realm, .arena {
+  border: 1px solid var(--accent1);
+  box-shadow: 0 0 20px var(--accent2);
+  padding: 10px;
+  margin: 10px;
+  border-radius: 8px;
+}
