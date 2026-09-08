@@ -5,6 +5,7 @@ const http = require('http');
 const app = express();
 app.use(express.json());
 
+const ws = new WebSocket('wss://hush-5i33.onrender.com');
 const PORT = process.env.PORT || 10000;
 
 // Create ONE server for both HTTP + WebSocket
