@@ -5,7 +5,7 @@ const http = require('http');
 const app = express();
 app.use(express.json());
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 
 // Create ONE server for both HTTP + WebSocket
 const server = http.createServer(app);
