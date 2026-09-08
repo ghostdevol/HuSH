@@ -1,62 +1,146 @@
-import express from "express";
-import { WebSocketServer } from "ws";
+const express = require('express');
+const { WebSocketServer } = require('ws');
+const http = require('http');
+const path = require('path');
 
-const PORT = process.env.PORT || 3000;
 const app = express();
-const server = app.listen(PORT, () => console.log(`Server running on ${PORT}`));
+app.use(express.json());
+app.use(express.static(path.join(__dirname, '..', 'public')));
 
-// Keep hosting a WebSocket server
-const wss = new WebSocketServer({ server });
+const PORT = process.env.PORT || 10000;
 
-// Optionally connect outward too
-const ws = new WebSocket(process.env.VITE_WS);
+// Create ONE server for both HTTP + WebSocket
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server, path: '/ws' });
+
 // ROOM STORAGE
 const rooms = new Set();
 
-// HTTP: Create room
-app.post('/createRoom', (req, res) => {
-    const { room } = req.body;
-    if (!room) return res.status(400).json({ error: 'Room name required' });
+// Helper: broadcast a payload to all clients in a room (optionally excluding one socket)
+function broadcastToRoom(room, payload, exceptSocket = null) {
+  const msg = JSON.stringify(payload);
+  for (const client of wss.clients) {
+    if (client.readyState === client.OPEN && client.currentRoom === room && client !== exceptSocket) {
+      client.send(msg);
+    }
+  }
+}
 
-    rooms.add(room);console.log(`Room created: ${room}`);
- 
-    res.json({ success: true, rooms: Array.from(rooms) });
+wss.on('connection', (socket, req) => {
+  socket.currentRoom = null;
+  socket.isAlive = true;
+
+  // keepalive
+  socket.on('pong', () => {
+    socket.isAlive = true;
+  });
+
+  // welcome
+  socket.send(JSON.stringify({ type: 'welcome', message: 'Connected to HuSH server' }));
+
+  socket.on('message', (raw) => {
+    let data;
+    try {
+      data = JSON.parse(raw);
+    } catch (err) {
+      socket.send(JSON.stringify({ type: 'error', message: 'Invalid JSON' }));
+      console.error('WS parse error:', err);
+      return;
+    }
+
+    if (data.type === 'join') {
+      const room = String(data.room || '').trim();
+      if (!room) {
+        socket.send(JSON.stringify({ type: 'error', message: 'room required to join' }));
+        return;
+      }
+      rooms.add(room);
+      const prev = socket.currentRoom;
+      socket.currentRoom = room;
+      console.log(`User joined room: ${room} (was: ${prev})`);
+      socket.send(JSON.stringify({ type: 'joined', room }));
+      broadcastToRoom(room, { type: 'system', message: `${data.user || 'Someone'} joined the room` }, socket);
+      return;
+    }
+
+    if (data.type === 'leave') {
+      if (socket.currentRoom) {
+        const left = socket.currentRoom;
+        socket.currentRoom = null;
+        socket.send(JSON.stringify({ type: 'left', room: left }));
+        broadcastToRoom(left, { type: 'system', message: `${data.user || 'Someone'} left the room` }, socket);
+      } else {
+        socket.send(JSON.stringify({ type: 'error', message: 'not in a room' }));
+      }
+      return;
+    }
+
+    if (data.type === 'msg') {
+      if (!socket.currentRoom) {
+        socket.send(JSON.stringify({ type: 'error', message: 'join a room before sending messages' }));
+        return;
+      }
+      const payload = {
+        type: 'msg',
+        user: data.user || 'User',
+        text: data.text || '',
+        ts: Date.now()
+      };
+      broadcastToRoom(socket.currentRoom, payload);
+      return;
+    }
+
+    socket.send(JSON.stringify({ type: 'error', message: 'unknown message type' }));
+  });
+
+  socket.on('close', () => {
+    console.log('User disconnected', socket.currentRoom);
+    if (socket.currentRoom) {
+      broadcastToRoom(socket.currentRoom, { type: 'system', message: 'A user disconnected' }, socket);
+    }
+  });
+
+  socket.on('error', (err) => {
+    console.error('WebSocket error:', err);
+  });
 });
 
-// WEBSOCKET: Chat system
-wss.on('connection', (ws) => {
-    ws.currentRoom = null;
+// Periodic ping to detect dead connections
+const pingInterval = setInterval(() => {
+  for (const socket of wss.clients) {
+    if (socket.isAlive === false) {
+      socket.terminate();
+      continue;
+    }
+    socket.isAlive = false;
+    try {
+      socket.ping();
+    } catch (err) {
+      socket.terminate();
+    }
+  }
+}, 30000);
 
-    ws.on('message', (msg) => {
-        try {
-            const data = JSON.parse(msg);
+wss.on('close', () => {
+  clearInterval(pingInterval);
+});
 
-            if (data.type === 'join') {
-                ws.currentRoom = data.room;
-                console.log(`User joined room: ${data.room}`);
-            }
+// HTTP: Create room
+app.post('/createRoom', (req, res) => {
+  const room = String((req.body && req.body.room) || '').trim();
+  if (!room) return res.status(400).json({ error: 'Room name required' });
 
-            if (data.type === 'msg' && ws.currentRoom) {
-                wss.clients.forEach((client) => {
-                    if (client.readyState === 1 && client.currentRoom === ws.currentRoom) {
-                        client.send(JSON.stringify({
-                            user: data.user || "User",
-                            text: data.text
-                        }));
-                    }
-                });
-            }
-        } catch (err) {
-            console.error('WS parse error:', err);
-        }
-    });
+  rooms.add(room);
+  console.log(`Room created: ${room}`);
 
-    ws.on('close', () => {
-        console.log('User disconnected');
-    });
+  res.json({ success: true, rooms: Array.from(rooms) });
+});
+
+app.get('/rooms', (req, res) => {
+  res.json({ rooms: Array.from(rooms) });
 });
 
 // Start server
 server.listen(PORT, () => {
-    console.log(`HuSH backend running on port ${PORT}`);
+  console.log(`HuSH backend running on port ${PORT}`);
 });
