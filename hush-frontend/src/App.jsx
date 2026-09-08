@@ -60,7 +60,7 @@ export default function App() {
   // 4. STRIPE INTEGRATED LIVE SOCKET LISTENER PIPELINE
   useEffect(() => {
     if (isAccountPaused) return;
-    const ws = new WebSocket('ws://localhost:5174');
+    const ws = new WebSocket('wss://hush-5i33.onrender.com');
     socketRef.current = ws;
 
     ws.onopen = () => {
