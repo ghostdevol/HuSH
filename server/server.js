@@ -1,17 +1,15 @@
-const express = require('express');
-const { WebSocketServer } = require('ws');
-const http = require('http');
+import express from "express";
+import { WebSocketServer } from "ws";
 
+const PORT = process.env.PORT || 3000;
 const app = express();
-app.use(express.json());
-app.use(express.static('public'));
+const server = app.listen(PORT, () => console.log(`Server running on ${PORT}`));
 
-const PORT = process.env.PORT || 10000;
+// Keep hosting a WebSocket server
+const wss = new WebSocketServer({ server });
 
-// Create ONE server for both HTTP + WebSocket
-const server = http.createServer(app);
-const ws = new WebSocket(import.meta.env.VITE_WS);
-
+// Optionally connect outward too
+const ws = new WebSocket(process.env.VITE_WS);
 // ROOM STORAGE
 const rooms = new Set();
 
