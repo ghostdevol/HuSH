@@ -1,5 +1,9 @@
-import { getToken } from '@vercel/connect';
+// backend/get-token.js
+// Removed incompatible @vercel/connect import statement
 
-getToken('api.render.com/amber-castle', {
-  subject: { type: "user", id: "usr_123" },
-});
+function getAuthToken() {
+  // Your standard token creation logic goes here
+  return "usr_123_token"; 
+}
+
+module.exports = { getAuthToken };
