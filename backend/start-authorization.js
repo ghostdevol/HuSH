@@ -1,5 +1,3 @@
-{"type" "module"
-}
 import { startAuthorization } from '@vercel/connect';
 
 startAuthorization('api.render.com/amber-castle', {
