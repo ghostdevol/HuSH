@@ -13,7 +13,7 @@ const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => 
 
 // Create ONE server for both HTTP + WebSocket
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server, path: '/ws' });
+const wss = new WebSocketServer({ server, path: '/ws'https://hush-5i33.onrender.com/ });
 
 // ROOM STORAGE: map roomName -> Set of ws clients
 const rooms = new Map();
