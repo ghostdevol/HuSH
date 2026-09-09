@@ -2,18 +2,39 @@
 
 const express = require('express');
 const http = require('http');
+const cors = require('cors'); // Added to allow Vercel frontend access
 const { WebSocketServer, WebSocket } = require('ws');
 
 const app = express();
 app.use(express.json());
 
-const PORT = process.env.PORT || 10000;
-// Optional: comma-separated list of allowed origins (e.g. "https://example.com,https://site.com")
+// 1. CONFIGURE CORS
+// This allows your Vite frontend (both locally and on Vercel) to interact with this API
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
 
-// Create ONE server for both HTTP + WebSocket
+app.use(cors({
+  origin: function (origin, callback) {
+    // If no ALLOWED_ORIGINS env variable is set, allow everything (useful for quick testing)
+    if (!ALLOWED_ORIGINS.length) return callback(null, true);
+    // Allow server-to-server or tools like Postman (which lack an origin header)
+    if (!origin) return callback(null, true);
+    
+    if (ALLOWED_ORIGINS.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Blocked by CORS policy'));
+    }
+  },
+  credentials: true
+}));
+
+const PORT = process.env.PORT || 10000;
+
+// Create ONE unified HTTP + WebSocket Server
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server, path: '/ws'https://hush-5i33.onrender.com/ });
+
+// FIX: Removed the pasted URL text that was breaking your initialization
+const wss = new WebSocketServer({ server, path: '/ws' });
 
 // ROOM STORAGE: map roomName -> Set of ws clients
 const rooms = new Map();
@@ -34,13 +55,6 @@ app.get('/rooms', (req, res) => {
   res.json({ rooms: Array.from(rooms.keys()) });
 });
 
-// Simple origin check (optional)
-function isOriginAllowed(origin) {
-  if (!ALLOWED_ORIGINS.length) return true;
-  if (!origin) return false;
-  return ALLOWED_ORIGINS.includes(origin);
-}
-
 // Broadcast helper: send an object to all clients in a room
 function broadcastToRoom(room, dataObj, exceptSocket = null) {
   const clients = rooms.get(room);
@@ -57,9 +71,12 @@ function broadcastToRoom(room, dataObj, exceptSocket = null) {
   }
 }
 
+// WebSocket Connection Management
 wss.on('connection', (ws, request) => {
   const origin = request.headers.origin;
-  if (!isOriginAllowed(origin)) {
+  
+  // Origin Check validation
+  if (ALLOWED_ORIGINS.length && origin && !ALLOWED_ORIGINS.includes(origin)) {
     console.warn('Connection rejected due to origin:', origin);
     ws.close(1008, 'Origin not allowed');
     return;
@@ -180,3 +197,4 @@ process.on('SIGTERM', shutdown);
 server.listen(PORT, () => {
   console.log(`HuSH backend running on port ${PORT}`);
 });
+
