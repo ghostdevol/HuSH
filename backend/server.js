@@ -2,7 +2,6 @@
 
 const express = require('express');
 const http = require('http');
-const cors = require('cors'); // Added to allow Vercel frontend access
 const { WebSocketServer, WebSocket } = require('ws');
 
 const app = express();
