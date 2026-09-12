@@ -8,26 +8,7 @@ const { WebSocketServer, WebSocket } = require('ws');
 const app = express();
 app.use(express.json());
 
-// 1. CONFIGURE CORS
-// This allows your Vite frontend (both locally and on Vercel) to interact with this API
-const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
-
-app.use(cors({
-  origin: function (origin, callback) {
-    // If no ALLOWED_ORIGINS env variable is set, allow everything (useful for quick testing)
-    if (!ALLOWED_ORIGINS.length) return callback(null, true);
-    // Allow server-to-server or tools like Postman (which lack an origin header)
-    if (!origin) return callback(null, true);
-    
-    if (ALLOWED_ORIGINS.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('Blocked by CORS policy'));
-    }
-  },
-  credentials: true
-}));
-
+const ws = new WebSocket('wss://hush-5133.onrender.com');
 const PORT = process.env.PORT || 10000;
 
 // Create ONE unified HTTP + WebSocket Server

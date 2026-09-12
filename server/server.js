@@ -32,6 +32,7 @@ const PORT = process.env.PORT || 10000;
 
 // Create ONE server for both HTTP + WebSocket
 const server = http.createServer(app);
+const WS= new WebSocketServer({ server });
 
 // FIXED: Removed the syntax-breaking URL string from this configuration object
 const wss = new WebSocketServer({ server, path: '/ws' });
