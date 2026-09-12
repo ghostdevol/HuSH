@@ -10,7 +10,7 @@ const PORT = process.env.PORT || 10000;
 
 // Create ONE server for both HTTP + WebSocket
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
+const WS= new WebSocketServer({ server });
 
 // ROOM STORAGE
 const rooms = new Set();
