@@ -2,13 +2,14 @@
 
 const express = require('express');
 const http = require('http');
+const cors = require('cors');
 const { WebSocketServer, WebSocket } = require('ws');
 
 const app = express();
 app.use(express.json());
 
 // 1. CONFIGURE CORS
-// This allows your Vite frontend (both locally and on Vercel) to interact with this API
+// This allows your frontend (both locally and on Vercel) to interact with this API
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
 
 app.use(cors({
@@ -17,7 +18,7 @@ app.use(cors({
     if (!ALLOWED_ORIGINS.length) return callback(null, true);
     // Allow server-to-server or tools like Postman (which lack an origin header)
     if (!origin) return callback(null, true);
-    
+
     if (ALLOWED_ORIGINS.includes(origin)) {
       callback(null, true);
     } else {
@@ -32,7 +33,6 @@ const PORT = process.env.PORT || 10000;
 // Create ONE unified HTTP + WebSocket Server
 const server = http.createServer(app);
 
-// FIX: Removed the pasted URL text that was breaking your initialization
 const wss = new WebSocketServer({ server, path: '/ws' });
 
 // ROOM STORAGE: map roomName -> Set of ws clients
@@ -54,6 +54,11 @@ app.get('/rooms', (req, res) => {
   res.json({ rooms: Array.from(rooms.keys()) });
 });
 
+// HTTP: Health check (useful for Render)
+app.get('/health', (req, res) => {
+  res.json({ ok: true, rooms: rooms.size, clients: wss.clients.size });
+});
+
 // Broadcast helper: send an object to all clients in a room
 function broadcastToRoom(room, dataObj, exceptSocket = null) {
   const clients = rooms.get(room);
@@ -70,11 +75,24 @@ function broadcastToRoom(room, dataObj, exceptSocket = null) {
   }
 }
 
+function leaveRoom(ws) {
+  const room = ws.currentRoom;
+  if (!room) return;
+  const set = rooms.get(room);
+  if (set) {
+    set.delete(ws);
+    broadcastToRoom(room, { type: 'system', message: 'A user left the room' }, ws);
+    if (set.size === 0) rooms.delete(room);
+  }
+  ws.currentRoom = null;
+}
+
 // WebSocket Connection Management
 wss.on('connection', (ws, request) => {
   const origin = request.headers.origin;
-  
-  // Origin Check validation
+
+  // Origin check: allow when no origins configured, or no origin header
+  // (non-browser clients), or origin is in the allow list
   if (ALLOWED_ORIGINS.length && origin && !ALLOWED_ORIGINS.includes(origin)) {
     console.warn('Connection rejected due to origin:', origin);
     ws.close(1008, 'Origin not allowed');
@@ -115,14 +133,7 @@ wss.on('connection', (ws, request) => {
     }
 
     if (type === 'leave') {
-      const room = ws.currentRoom;
-      if (room) {
-        const set = rooms.get(room);
-        if (set) set.delete(ws);
-        ws.currentRoom = null;
-        broadcastToRoom(room, { type: 'system', message: 'A user left the room' }, ws);
-        if (set && set.size === 0) rooms.delete(room);
-      }
+      leaveRoom(ws);
       ws.send(JSON.stringify({ type: 'left' }));
       return;
     }
@@ -134,7 +145,7 @@ wss.on('connection', (ws, request) => {
         return;
       }
       const text = (data.text || '').toString().slice(0, 2000);
-      const user = data.user || 'User';
+      const user = (data.user || 'User').toString().slice(0, 50);
       const payload = { type: 'msg', user, text, ts: Date.now() };
       broadcastToRoom(room, payload);
       return;
@@ -144,15 +155,7 @@ wss.on('connection', (ws, request) => {
   });
 
   ws.on('close', () => {
-    const room = ws.currentRoom;
-    if (room) {
-      const set = rooms.get(room);
-      if (set) {
-        set.delete(ws);
-        broadcastToRoom(room, { type: 'system', message: 'A user disconnected' }, ws);
-        if (set.size === 0) rooms.delete(room);
-      }
-    }
+    leaveRoom(ws);
     console.log('Client disconnected');
   });
 
@@ -188,6 +191,8 @@ function shutdown() {
       process.exit(0);
     });
   });
+  // Failsafe so Render deploys don't hang
+  setTimeout(() => process.exit(1), 5000).unref();
 }
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
@@ -196,4 +201,4 @@ process.on('SIGTERM', shutdown);
 server.listen(PORT, () => {
   console.log(`HuSH backend running on port ${PORT}`);
 });
-
+    
