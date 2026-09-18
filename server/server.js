@@ -2,51 +2,50 @@
 
 const express = require('express');
 const http = require('http');
-const cors = require('cors'); // Added: Essential for Vercel -> Render HTTP communication
+const cors = require('cors');
 const { WebSocketServer, WebSocket } = require('ws');
 
 const app = express();
 app.use(express.json());
 
 // 1. ALLOWED ORIGINS CONFIGURATION
-const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 
-// Enable CORS middleware so Vercel can fetch /rooms and /createRoom
-app.use(cors({
-  origin: function (origin, callback) {
-    // If no origins are restricted in the environment variables, allow all (good for fallback)
-    if (!ALLOWED_ORIGINS.length) return callback(null, true);
-    // Allow server-to-server requests or tools like Postman
-    if (!origin) return callback(null, true);
-    
-    if (ALLOWED_ORIGINS.includes(origin)) {
-      callback(null, true);
-    } else {
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!ALLOWED_ORIGINS.length) return callback(null, true);
+      if (!origin) return callback(null, true); // server-to-server, curl, Postman
+      if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
       callback(new Error('Not allowed by CORS'));
-    }
-  },
-  credentials: true
-}));
+    },
+    credentials: true,
+  })
+);
 
 const PORT = process.env.PORT || 10000;
 
-// Create ONE server for both HTTP + WebSocket
+// ONE server for both HTTP + WebSocket
 const server = http.createServer(app);
 
-// FIXED: Removed the syntax-breaking URL string from this configuration object
+// Single WebSocketServer. (The old duplicate `new WebSocketServer({ server })`
+// was removed — it swallowed every upgrade before the /ws server saw it.)
 const wss = new WebSocketServer({ server, path: '/ws' });
 
-// ROOM STORAGE: map roomName -> Set of ws clients
+// ROOM STORAGE: roomName -> Set of ws clients
 const rooms = new Map();
 
 // HTTP: Create room
 app.post('/createRoom', (req, res) => {
   const { room } = req.body;
-  if (!room || typeof room !== 'string') return res.status(400).json({ error: 'Room name required' });
-
+  if (!room || typeof room !== 'string') {
+    return res.status(400).json({ error: 'Room name required' });
+  }
   if (!rooms.has(room)) rooms.set(room, new Set());
   console.log(`Room created: ${room}`);
-
   res.json({ success: true, rooms: Array.from(rooms.keys()) });
 });
 
@@ -55,10 +54,17 @@ app.get('/rooms', (req, res) => {
   res.json({ rooms: Array.from(rooms.keys()) });
 });
 
-// Simple origin check for WebSocket upgrade connections
+// HTTP: Health check (useful for Render)
+app.get('/health', (req, res) => {
+  res.json({ ok: true, rooms: rooms.size, clients: wss.clients.size });
+});
+
+// Origin check for WebSocket upgrade connections.
+// Matches the CORS policy: non-browser clients send no Origin header,
+// so allow those through instead of rejecting them.
 function isOriginAllowed(origin) {
   if (!ALLOWED_ORIGINS.length) return true;
-  if (!origin) return false;
+  if (!origin) return true;
   return ALLOWED_ORIGINS.includes(origin);
 }
 
@@ -78,10 +84,22 @@ function broadcastToRoom(room, dataObj, exceptSocket = null) {
   }
 }
 
+function leaveRoom(ws) {
+  const room = ws.currentRoom;
+  if (!room) return;
+  const set = rooms.get(room);
+  if (set) {
+    set.delete(ws);
+    broadcastToRoom(room, { type: 'system', message: 'A user left the room' }, ws);
+    if (set.size === 0) rooms.delete(room);
+  }
+  ws.currentRoom = null;
+}
+
 wss.on('connection', (ws, request) => {
   const origin = request.headers.origin;
   if (!isOriginAllowed(origin)) {
-    console.warn('Connection rejected due to origin:', origin);
+    console.warn('WS connection rejected, origin not allowed:', origin);
     ws.close(1008, 'Origin not allowed');
     return;
   }
@@ -97,7 +115,7 @@ wss.on('connection', (ws, request) => {
     let data;
     try {
       data = JSON.parse(raw.toString());
-    } catch (err) {
+    } catch {
       ws.send(JSON.stringify({ type: 'error', message: 'Invalid JSON' }));
       return;
     }
@@ -120,14 +138,7 @@ wss.on('connection', (ws, request) => {
     }
 
     if (type === 'leave') {
-      const room = ws.currentRoom;
-      if (room) {
-        const set = rooms.get(room);
-        if (set) set.delete(ws);
-        ws.currentRoom = null;
-        broadcastToRoom(room, { type: 'system', message: 'A user left the room' }, ws);
-        if (set && set.size === 0) rooms.delete(room);
-      }
+      leaveRoom(ws);
       ws.send(JSON.stringify({ type: 'left' }));
       return;
     }
@@ -138,10 +149,9 @@ wss.on('connection', (ws, request) => {
         ws.send(JSON.stringify({ type: 'error', message: 'Not in a room' }));
         return;
       }
-      const text = (data.text || '').toString().slice(0, 2000);
-      const user = data.user || 'User';
-      const payload = { type: 'msg', user, text, ts: Date.now() };
-      broadcastToRoom(room, payload);
+      const text = String(data.text || '').slice(0, 2000);
+      const user = String(data.user || 'User').slice(0, 50);
+      broadcastToRoom(room, { type: 'msg', user, text, ts: Date.now() });
       return;
     }
 
@@ -149,50 +159,37 @@ wss.on('connection', (ws, request) => {
   });
 
   ws.on('close', () => {
-    const room = ws.currentRoom;
-    if (room) {
-      const set = rooms.get(room);
-      if (set) {
-        set.delete(ws);
-        broadcastToRoom(room, { type: 'system', message: 'A user disconnected' }, ws);
-        if (set.size === 0) rooms.delete(room);
-      }
-    }
+    leaveRoom(ws);
     console.log('Client disconnected');
   });
 
-  ws.on('error', (err) => {
-    console.error('WebSocket error:', err);
-  });
+  ws.on('error', (err) => console.error('WebSocket error:', err));
 });
 
 // Heartbeat — terminate dead connections
 const interval = setInterval(() => {
-  for (const ws of wss.clients) {
-    if (ws.isAlive === false) {
-      ws.terminate();
-      continue;
-    }
+  wss.clients.forEach((ws) => {
+    if (ws.isAlive === false) return ws.terminate();
     ws.isAlive = false;
-    try {
-      ws.ping();
-    } catch (err) {
-      console.error('Ping error:', err);
-    }
-  }
+    ws.ping(() => {});
+  });
 }, 30000);
+
+wss.on('close', () => clearInterval(interval));
 
 // Graceful shutdown
 function shutdown() {
   console.log('Shutting down server...');
   clearInterval(interval);
-  wss.clients.forEach((ws) => ws.terminate());
+  for (const ws of wss.clients) ws.terminate();
   wss.close(() => {
     server.close(() => {
       console.log('Server closed.');
       process.exit(0);
     });
   });
+  // Failsafe: don't hang forever on Render
+  setTimeout(() => process.exit(1), 5000).unref();
 }
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
@@ -201,5 +198,6 @@ process.on('SIGTERM', shutdown);
 server.listen(PORT, () => {
   console.log(`HuSH backend running on port ${PORT}`);
 });
+      
 
 
