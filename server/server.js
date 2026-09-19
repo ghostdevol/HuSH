@@ -151,7 +151,7 @@ wss.on('connection', (ws, request) => {
       }
       const text = String(data.text || '').slice(0, 2000);
       const user = String(data.user || 'User').slice(0, 50);
-      broadcastToRoom(room, { type: 'msg', user, text, ts: Date.now() });
+      broadcastToRoom(room, { type: 'msg', room, user, text, ts: Date.now() });
       return;
     }
 
