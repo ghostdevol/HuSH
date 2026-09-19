@@ -146,7 +146,7 @@ wss.on('connection', (ws, request) => {
       }
       const text = (data.text || '').toString().slice(0, 2000);
       const user = (data.user || 'User').toString().slice(0, 50);
-      const payload = { type: 'msg', user, text, ts: Date.now() };
+      const payload = { type: 'msg', room, user, text, ts: Date.now() };
       broadcastToRoom(room, payload);
       return;
     }

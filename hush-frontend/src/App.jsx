@@ -1,5 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 
+// WebSocket URL: set VITE_WS_URL in your Vercel env vars to override.
+// Must include the /ws path — the backend only accepts upgrades there.
+const WS_URL = import.meta.env.VITE_WS_URL || 'wss://hush-5i33.onrender.com/ws';
+
 export default function App() {
   // 1. SYSTEM PROFILE METRIC REGISTRIES
   const [activeRoom, setActiveRoom] = useState('lobby');
@@ -47,6 +51,8 @@ export default function App() {
   const socketRef = useRef(null);
   const chatEndRef = useRef(null);
   const localVideoRef = useRef(null);
+  // Ref mirror of blockedUsers so blocking someone doesn't tear down the socket
+  const blockedRef = useRef(new Set());
 
   // Cleaned compliant rooms list
   const rooms = [
@@ -57,37 +63,39 @@ export default function App() {
     { id: 'xxx', name: '👑 Platinum VIP Chambers', intent: 'XXX' }
   ];
 
-  // 4. STRIPE INTEGRATED LIVE SOCKET LISTENER PIPELINE
+  // 4. LIVE SOCKET LISTENER PIPELINE
+  // Protocol (must match backend/server.js):
+  //   -> { type: 'join', room } | { type: 'leave' } | { type: 'msg', user, text }
+  //   <- { type: 'joined', room } | { type: 'left' } | { type: 'msg', room, user, text, ts }
+  //      | { type: 'system', message } | { type: 'error', message }
   useEffect(() => {
     if (isAccountPaused) return;
-    const ws = new WebSocket('wss://hush-5i33.onrender.com');
+    const ws = new WebSocket(WS_URL);
     socketRef.current = ws;
 
     ws.onopen = () => {
-      ws.send(JSON.stringify({ type: 'update_profile', username, gender, age, location, intent, bio, photoUrl, interest: myInterest }));
       ws.send(JSON.stringify({ type: 'join', room: activeRoom }));
     };
 
     ws.onmessage = (e) => {
       try {
         const incoming = JSON.parse(e.data);
-        if (blockedUsers.has(incoming.user)) return;
-        
-        if (incoming.type === 'history') {
-          setMessages(incoming.messages);
-        } else if (incoming.type === 'message' && incoming.room === activeRoom) {
+        if (incoming.user && blockedRef.current.has(incoming.user)) return;
+
+        if (incoming.type === 'msg' && incoming.room === activeRoom) {
           setMessages((p) => [...p, incoming]);
-        } else if (incoming.type === 'checkout_url_generated') {
-          if (incoming.success && incoming.url) {
-            window.open(incoming.url, '_blank');
-          } else {
-            alert(`Stripe Billing Error: ${incoming.error}`);
-          }
+        } else if (incoming.type === 'system') {
+          setMessages((p) => [...p, { user: 'system', text: incoming.message, ts: Date.now() }]);
+        } else if (incoming.type === 'joined') {
+          setMessages((p) => [...p, { user: 'system', text: `Joined ${incoming.room}`, ts: Date.now() }]);
+        } else if (incoming.type === 'error') {
+          console.error('Server error:', incoming.message);
         }
       } catch (err) { console.error(err); }
     };
+    ws.onerror = (err) => console.error('WebSocket error:', err);
     return () => ws.close();
-  }, [activeRoom, isAccountPaused, isPremium, blockedUsers]);
+  }, [activeRoom, isAccountPaused]);
   const handleStartVideo = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
@@ -104,20 +112,15 @@ export default function App() {
   const handleSendMessage = (e) => {
     e.preventDefault();
     if (!inputValue.trim() || !socketRef.current || isAccountPaused) return;
-    socketRef.current.send(JSON.stringify({ type: 'message', room: activeRoom, user: username, text: inputValue }));
+    if (socketRef.current.readyState !== WebSocket.OPEN) return;
+    socketRef.current.send(JSON.stringify({ type: 'msg', user: username, text: inputValue }));
     setInputValue('');
   };
 
-  // 5. TRIGGER STRIPE WORKFLOW OVER WEBSOCKET
+  // 5. PREMIUM UPGRADES — Stripe isn't wired up on the backend yet,
+  // so this is a placeholder until checkout is implemented.
   const handleUpgradeSubscription = () => {
-    if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
-      alert("Socket connection offline. Please check your server status.");
-      return;
-    }
-    socketRef.current.send(JSON.stringify({
-      type: 'request_checkout_session',
-      user: username
-    }));
+    alert('Premium checkout is coming soon.');
   };
 
   const handleRollDice = () => {
@@ -128,9 +131,17 @@ export default function App() {
   };
 
   const handleBlockUser = (targetName) => {
-    setBlockedUsers(new Set([...blockedUsers, targetName]));
+    const next = new Set([...blockedRef.current, targetName]);
+    blockedRef.current = next;
+    setBlockedUsers(next);
     setSelectedUser(null);
     alert(`User ${targetName} has been blocked.`);
+  };
+
+  const handleSwitchRoom = (roomId) => {
+    if (roomId === activeRoom) return;
+    setMessages([]);
+    setActiveRoom(roomId);
   };
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
@@ -187,7 +198,7 @@ export default function App() {
               return (
                 <button
                   key={room.id}
-                  onClick={() => canAccess && setActiveRoom(room.id)}
+                  onClick={() => canAccess && handleSwitchRoom(room.id)}
                   className={`
                     w-full text-left px-3 py-2 rounded-lg 
                     flex items-center justify-between transition-all 
