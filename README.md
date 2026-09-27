@@ -1,26 +1,34 @@
 # HuSH
 
-HuSH – private rooms, VIP access, and real conversations kept at a whisper.
+Private real-time chat rooms — conversations kept at a whisper.
 
-A modern, dark‑mode social lounge built with React and Tailwind. HuSH focuses on privacy, vibe, and connection through exclusive rooms, premium UI, and a clean, whisper‑level chat experience.
+## Architecture
 
-## Features
-- Private & public chat rooms  
-- VIP‑only access areas  
-- Real‑time messaging  
-- Dark, neon‑accented UI  
-- Tailwind‑powered glassmorphism  
-- Scalable React component architecture  
+- `hush-frontend/` — React + Vite + Tailwind client (deployed on Vercel)
+- `backend/` — Node.js + Express + `ws` server (deployed on Render; `node server.js`)
 
-## Tech Stack
-- React  
-- Vite  
-- Tailwind CSS  
-- Firebase / Supabase (planned for real‑time chat + auth)  
-- Stripe (planned for VIP access payments)  
+Room chat runs over HTTP with a `/ws` WebSocket for live messages.
 
-## Vision
-HuSH is designed as a digital VIP lounge — a place where conversations feel private, exclusive, and alive. The goal is to create a premium chat environment with whisper‑level intimacy and late‑night energy.
+## Run it locally
 
-## Status
-🚧 Active development  
+Backend:
+
+```sh
+cd backend
+npm install
+npm start
+```
+
+Frontend:
+
+```sh
+cd hush-frontend
+npm install
+npm run dev
+```
+
+Set `VITE_WS_URL` to your backend URL so the client knows where to connect.
+
+## License
+
+See LICENSE.
