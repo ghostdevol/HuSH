@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">HuSH</string>
+    <string name="title_activity_main">HuSH</string>
+    <string name="package_name">com.ghosttech.hush</string>
+    <string name="custom_url_scheme">com.ghosttech.hush</string>
+</resources>
