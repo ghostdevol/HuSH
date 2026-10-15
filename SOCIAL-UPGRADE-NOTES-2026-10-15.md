@@ -176,6 +176,58 @@ is preserved untouched at `src/LegacyApp.jsx`; legacy root dirs
   cross-room isolation, peer-not-found, rtc-live, leave cleanup.
 - Frontend `npm run build` clean; Gradle `assembleRelease` clean.
 
+## Cypher Rooms v1 (added later on 2026-10-15)
+
+The flagship: a room that runs one beat with a mic queue — the host
+drops a beat, people line up, the mic passes down the line, and
+ending the session posts the recap to the feed.
+
+- **Create:** Rooms page → "🎤 Host a cypher" (logged-in only): room
+  name, beat = one of your uploaded tracks **or** a pasted audio URL,
+  BPM (40–240, default 90), bars per turn (1–64, default 8).
+  `POST /createRoom` accepts `type:'cypher'` + beat config; the host
+  is taken from the caller's login. The session starts when the
+  first member joins the room over WS; a host can also (re)start one
+  in any room with a `cypher-start` WS message.
+- **Wire protocol (over the existing /ws):** server broadcasts
+  `cypher-state` `{active, host, beatTitle, beatUrl, bpm,
+  barsPerTurn, queue:[handles], current, turnStartedAt,
+  performers:[handles]}` on every change. Clients send
+  `cypher-queue-join` (mic open → you take it immediately),
+  `cypher-queue-leave`, `cypher-pass` (performer or host),
+  `cypher-end` (host only). A departing performer auto-passes; a
+  departing queue member drops out. Host ending the session creates
+  the recap feed post: `🎤 Cypher in <room> — <beat title> — ran
+  with @a, @b, @c`, authored by the host, and broadcasts
+  `cypher-ended` with the recap post id.
+- **The performer's mix is the sync.** The beat plays on the
+  PERFORMER's device only: their client mixes mic + looping beat in
+  WebAudio (AudioContext → MediaStreamDestination) and that mixed
+  track replaces their mic track on the existing RTC mesh. Nobody
+  else plays the beat locally — the room hears the performer's mix,
+  so there is no multi-device beat-sync problem to solve. When the
+  bars elapse (beats = bars×4, seconds = beats×60÷BPM) the
+  performer's client auto-passes; the countdown bar shows the time
+  left; manual pass (and the host's pass) always works.
+- **Supporting change:** `/uploads/` now sends
+  `Access-Control-Allow-Origin: *` so WebAudio can read track audio
+  from any app origin (the files are public-read by design).
+- **Smoke test (headless, 20/20 PASS):** register ×2, track upload,
+  cypher room create (host from token), session starts on join with
+  the full state, queue-join with open mic takes it, second joiner
+  queues, pass hands off in order, performers recorded in order,
+  empty-queue pass opens the mic, non-host end refused, host end
+  broadcasts `cypher-ended`, recap post verified in the feed (right
+  text, right author), health shows 0 live cyphers after, plain
+  posts unaffected. Frontend `npm run build` clean.
+- **Honest gaps:** real audio (mic + beat audibly mixed for other
+  people) is NOT verified — that needs Daniel on two real devices,
+  same as the base video call. If a beat URL's host blocks cross-
+  origin audio reads, mixing fails loudly with an on-screen error
+  rather than silently (uploaded tracks always work). Guests can
+  watch/listen but cannot queue — the queue is accounts-only,
+  because the recap names performers by handle.
+
 ## ⚠️ Known limit — uploaded files live on borrowed time
 Photos and tracks are stored on the backend's local filesystem
 (`backend/uploads/`). **Render's filesystem is ephemeral: files
@@ -187,13 +239,24 @@ the same filesystem, same caveat. Nothing about this blocks
 shipping; it is the first thing to upgrade before calling HuSH
 anybody's permanent archive.
 
-## Daniel's remaining steps (nothing was pushed)
-1. **git push** — all changes are local and **uncommitted** in
-   `~/workspace/hush-repo` (nothing was pushed anywhere).
-2. **Render redeploy of the backend** — the social features (and
-   photo/track uploads, WebRTC signaling, themes, avatars) go live
-   only when the new `backend/server.js` deploys. Until then the
-   live backend is still the old rooms-only build.
+## Daniel's remaining steps (updated 2026-10-15, evening)
+1. **git push — BLOCKED on auth, your one step.** Both builds are
+   committed locally on `main` in `~/workspace/hush-repo`
+   (`818f333` HuSH Social, plus the Cypher Rooms commit on top).
+   The VM has no working GitHub credential: HTTPS push fails with
+   `fatal: could not read Username for 'https://github.com'`, the
+   env tokens are empty, `gh` is not logged in, and SSH egress is
+   reset by the proxy. Fix once: complete a `gh auth login`
+   (device flow — you're logged into GitHub on your phone) or
+   otherwise give this VM a credential, then the push is one
+   command: `cd ~/workspace/hush-repo && git push origin main`.
+2. **Render redeploy of the backend** — happens automatically on
+   push if the service tracks `main`; the social features (and
+   cyphers, photo/track uploads, WebRTC signaling, themes, avatars)
+   go live only when the new `backend/server.js` deploys. Until
+   then the live backend is still the old rooms-only build
+   (verified 2026-10-15 17:20 CDT: `/health` 200 old-shape,
+   `/feed` 404).
 3. **Vercel redeploy of the frontend** for the web version.
 4. The APK needs no store anything — install `HuSH-Social.apk`
    directly; it talks to the production backend URL, so its social

@@ -41,6 +41,13 @@ const wss = new WebSocketServer({ server, path: '/ws' });
 
 // ROOM STORAGE: map roomName -> Set of ws clients
 const rooms = new Map();
+// CYPHER ROOMS (v1, 2026-10-15): roomName -> config stored at createRoom
+// time, and roomName -> live session while a cypher is running.
+// Session: { host, beatTitle, beatUrl, bpm, barsPerTurn,
+//            queue: [handles waiting], current: handle|null,
+//            turnStartedAt: epoch ms, performers: [handles in order] }
+const roomConfigs = new Map();
+const cypherSessions = new Map();
 
 // ===================== SOCIAL LAYER (2026-10-15) =====================
 // Users, profiles, follows, posts, likes, comments. Persisted to JSON
@@ -75,7 +82,12 @@ const PHOTOS_FILE = path.join(__dirname, 'photos.json');
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 try { fs.mkdirSync(UPLOADS_DIR, { recursive: true }); } catch (err) { console.error('uploads dir:', err); }
 const photos = loadJson(PHOTOS_FILE, []);
-app.use('/uploads', express.static(UPLOADS_DIR));
+// Public uploads get a permissive CORS header so WebAudio (cypher beat
+// mixing) can read them from any app origin; the files are public-read
+// by design (profile photos / tracks), same as the static mount itself.
+app.use('/uploads', express.static(UPLOADS_DIR, {
+  setHeaders: (res) => { res.setHeader('Access-Control-Allow-Origin', '*'); }
+}));
 // tracks: [ { id, owner, title, createdAt, filename } ] — audio files live
 // in the same uploads/ dir and are served by the same static mount.
 // Same Render-ephemeral-filesystem caveat as photos.
@@ -433,6 +445,22 @@ app.get('/feed', (req, res) => {
   res.json({ posts: feed });
 });
 
+// Shared post creation (REST /posts and the cypher recap both use it).
+function createPostRecord(author, text, photoId = null) {
+  const post = {
+    id: crypto.randomBytes(8).toString('hex'),
+    author,
+    text,
+    createdAt: Date.now(),
+    photoId,
+    likes: [],
+    comments: []
+  };
+  posts.push(post);
+  savePosts();
+  return post;
+}
+
 app.post('/posts', (req, res) => {
   const me = requireAuth(req, res);
   if (!me) return;
@@ -445,9 +473,7 @@ app.post('/posts', (req, res) => {
     photoId = photo.id;
   }
   if (!text && !photoId) return res.status(400).json({ error: 'Post text required' });
-  const post = { id: crypto.randomBytes(8).toString('hex'), author: me, text, createdAt: Date.now(), photoId, likes: [], comments: [] };
-  posts.push(post);
-  savePosts();
+  const post = createPostRecord(me, text, photoId);
   res.status(201).json({ post: serializePost(post, me) });
 });
 
@@ -636,15 +662,38 @@ function broadcastPresence() {
   }
 }
 
-// HTTP: Create room
+// HTTP: Create room — plain chat room, or a cypher room when
+// type:'cypher' comes with a beat. The cypher config is stored and the
+// session starts when the first member joins over WS.
 app.post('/createRoom', (req, res) => {
   const { room } = req.body;
   if (!room || typeof room !== 'string') return res.status(400).json({ error: 'Room name required' });
 
   if (!rooms.has(room)) rooms.set(room, new Set());
-  console.log(`Room created: ${room}`);
 
-  res.json({ success: true, rooms: Array.from(rooms.keys()) });
+  let cypher = null;
+  if (req.body.type === 'cypher') {
+    const beatUrl = (req.body.beatUrl || '').toString().trim().slice(0, 400);
+    if (!beatUrl || (!/^https?:\/\//i.test(beatUrl) && !beatUrl.startsWith('/uploads/'))) {
+      return res.status(400).json({ error: 'Cypher needs a beat: an http(s) URL or one of your uploaded tracks' });
+    }
+    const bpmRaw = parseInt(req.body.bpm, 10);
+    const barsRaw = parseInt(req.body.barsPerTurn, 10);
+    cypher = {
+      type: 'cypher',
+      // Host comes from the caller's login when present — the recap
+      // post and host controls belong to a real account.
+      host: authHandle(req) || (req.body.host || '').toString().trim().toLowerCase() || null,
+      beatTitle: (req.body.beatTitle || 'Untitled beat').toString().slice(0, 80),
+      beatUrl,
+      bpm: Number.isFinite(bpmRaw) && bpmRaw >= 40 && bpmRaw <= 240 ? bpmRaw : 90,
+      barsPerTurn: Number.isFinite(barsRaw) && barsRaw >= 1 && barsRaw <= 64 ? barsRaw : 8
+    };
+    roomConfigs.set(room, cypher);
+  }
+  console.log(`Room created: ${room}${cypher ? ' (cypher)' : ''}`);
+
+  res.json({ success: true, rooms: Array.from(rooms.keys()), cypher });
 });
 
 // HTTP: List rooms
@@ -662,6 +711,7 @@ app.get('/health', (req, res) => {
     posts: posts.length,
     photos: photos.length,
     tracks: tracks.length,
+    cyphers: cypherSessions.size,
     online: currentOnline().length
   });
 });
@@ -682,15 +732,113 @@ function broadcastToRoom(room, dataObj, exceptSocket = null) {
   }
 }
 
+// ===================== CYPHER ROOMS (v1) =====================
+// A cypher room runs one beat with a mic queue. The host starts it
+// (room config at createRoom time, or cypher-start over WS), people
+// join the queue, the mic passes down the line, and ending the
+// session posts a recap to the feed under the host's name.
+// The beat itself is mixed on the PERFORMER's client (WebAudio), so
+// the room hears the performer's mix — see ChatRoom.jsx.
+
+function cypherStatePayload(room) {
+  const s = cypherSessions.get(room);
+  if (!s) return { type: 'cypher-state', room, active: false };
+  return {
+    type: 'cypher-state',
+    room,
+    active: true,
+    host: s.host,
+    beatTitle: s.beatTitle,
+    beatUrl: s.beatUrl,
+    bpm: s.bpm,
+    barsPerTurn: s.barsPerTurn,
+    queue: [...s.queue],
+    current: s.current,
+    turnStartedAt: s.turnStartedAt,
+    performers: [...s.performers]
+  };
+}
+
+function broadcastCypherState(room) {
+  broadcastToRoom(room, cypherStatePayload(room));
+}
+
+function startCypher(room, cfg) {
+  cypherSessions.set(room, {
+    host: cfg.host || null,
+    beatTitle: cfg.beatTitle || 'Untitled beat',
+    beatUrl: cfg.beatUrl || '',
+    bpm: cfg.bpm || 90,
+    barsPerTurn: cfg.barsPerTurn || 8,
+    queue: [],
+    current: null,
+    turnStartedAt: null,
+    performers: []
+  });
+  broadcastToRoom(room, { type: 'system', message: `🎤 Cypher started — ${cfg.beatTitle || 'Untitled beat'}` });
+  broadcastCypherState(room);
+}
+
+// Move the mic to the next queued handle that is actually in the room.
+// Records each new performer (in order) for the recap post.
+function advanceCypher(room) {
+  const s = cypherSessions.get(room);
+  if (!s) return;
+  const clients = rooms.get(room) || new Set();
+  const present = new Set(Array.from(clients).map(c => c.handle).filter(Boolean));
+  let next = null;
+  while (s.queue.length) {
+    const candidate = s.queue.shift();
+    if (present.has(candidate)) { next = candidate; break; }
+  }
+  s.current = next;
+  s.turnStartedAt = next ? Date.now() : null;
+  if (next && !s.performers.includes(next)) s.performers.push(next);
+  broadcastCypherState(room);
+}
+
+function endCypher(room) {
+  const s = cypherSessions.get(room);
+  if (!s) return null;
+  cypherSessions.delete(room);
+  let recapPostId = null;
+  if (s.host && users[s.host]) {
+    const ranWith = s.performers.length
+      ? s.performers.map(h => '@' + h).join(', ')
+      : 'no takers this time';
+    const post = createPostRecord(
+      s.host,
+      `🎤 Cypher in ${room} — ${s.beatTitle} — ran with ${ranWith}`
+    );
+    recapPostId = post.id;
+  }
+  broadcastToRoom(room, { type: 'cypher-ended', room, recapPostId });
+  broadcastCypherState(room);
+  return recapPostId;
+}
+
 function leaveRoom(ws) {
   const room = ws.currentRoom;
   if (!room) return;
   const set = rooms.get(room);
   if (set) {
     set.delete(ws);
+    // Cypher housekeeping: a departing performer passes the mic on;
+    // a departing queue member drops out of the line.
+    const s = cypherSessions.get(room);
+    if (s && ws.handle) {
+      const qi = s.queue.indexOf(ws.handle);
+      if (qi >= 0) s.queue.splice(qi, 1);
+      if (s.current === ws.handle) advanceCypher(room);
+      else if (qi >= 0) broadcastCypherState(room);
+    }
     broadcastToRoom(room, { type: 'system', message: 'A user left the room' }, ws);
     broadcastRtcPeers(room);
-    if (set.size === 0) rooms.delete(room);
+    if (set.size === 0) {
+      rooms.delete(room);
+      cypherSessions.delete(room);
+      roomConfigs.delete(room);
+    }
   }
   ws.currentRoom = null;
 }
@@ -799,6 +947,14 @@ wss.on('connection', (ws, request) => {
       broadcastToRoom(room, { type: 'system', message: 'A user joined the room' }, ws);
       ws.send(JSON.stringify({ type: 'joined', room, peerId: ws.peerId }));
       broadcastRtcPeers(room);
+      // Cypher: a configured cypher room starts its session when the
+      // first member joins; joining a running cypher re-sends state.
+      const cfg = roomConfigs.get(room);
+      if (cfg && cfg.type === 'cypher' && !cypherSessions.has(room)) {
+        startCypher(room, cfg);
+      } else if (cypherSessions.has(room)) {
+        try { ws.send(JSON.stringify(cypherStatePayload(room))); } catch (err) { /* ignore */ }
+      }
       return;
     }
 
@@ -834,6 +990,94 @@ wss.on('connection', (ws, request) => {
         console.error('Error relaying signal:', err);
       }
       return;
+    }
+
+    // ---- Cypher room control ----
+    if (type === 'cypher-start' || type === 'cypher-queue-join' || type === 'cypher-queue-leave' ||
+        type === 'cypher-pass' || type === 'cypher-end') {
+      const room = ws.currentRoom;
+      if (!room) {
+        ws.send(JSON.stringify({ type: 'error', message: 'Not in a room' }));
+        return;
+      }
+
+      if (type === 'cypher-start') {
+        if (!ws.handle) {
+          ws.send(JSON.stringify({ type: 'error', message: 'Login required to host a cypher' }));
+          return;
+        }
+        const existing = cypherSessions.get(room);
+        if (existing && existing.host !== ws.handle) {
+          ws.send(JSON.stringify({ type: 'error', message: 'Only the host can restart the cypher' }));
+          return;
+        }
+        const bpmRaw = parseInt(data.bpm, 10);
+        const barsRaw = parseInt(data.barsPerTurn, 10);
+        const cfg = {
+          host: ws.handle,
+          beatTitle: ((data.beatTitle || (existing && existing.beatTitle) || 'Untitled beat') + '').slice(0, 80),
+          beatUrl: ((data.beatUrl || (existing && existing.beatUrl) || '') + '').slice(0, 400),
+          bpm: Number.isFinite(bpmRaw) && bpmRaw >= 40 && bpmRaw <= 240 ? bpmRaw : (existing ? existing.bpm : 90),
+          barsPerTurn: Number.isFinite(barsRaw) && barsRaw >= 1 && barsRaw <= 64 ? barsRaw : (existing ? existing.barsPerTurn : 8)
+        };
+        if (!cfg.beatUrl) {
+          ws.send(JSON.stringify({ type: 'error', message: 'Cypher needs a beat URL' }));
+          return;
+        }
+        startCypher(room, cfg);
+        return;
+      }
+
+      const session = cypherSessions.get(room);
+      if (!session) {
+        ws.send(JSON.stringify({ type: 'error', message: 'No cypher running in this room' }));
+        return;
+      }
+
+      if (type === 'cypher-queue-join') {
+        if (!ws.handle) {
+          ws.send(JSON.stringify({ type: 'error', message: 'Login required to join the mic queue' }));
+          return;
+        }
+        if (session.current === ws.handle) { broadcastCypherState(room); return; }
+        if (!session.current) {
+          // Mic is open — stepping up takes it immediately.
+          session.current = ws.handle;
+          session.turnStartedAt = Date.now();
+          if (!session.performers.includes(ws.handle)) session.performers.push(ws.handle);
+        } else if (!session.queue.includes(ws.handle)) {
+          session.queue.push(ws.handle);
+        }
+        broadcastCypherState(room);
+        return;
+      }
+
+      if (type === 'cypher-queue-leave') {
+        if (!ws.handle) return;
+        if (session.current === ws.handle) { advanceCypher(room); return; }
+        const qi = session.queue.indexOf(ws.handle);
+        if (qi >= 0) session.queue.splice(qi, 1);
+        broadcastCypherState(room);
+        return;
+      }
+
+      if (type === 'cypher-pass') {
+        if (session.current !== ws.handle && session.host !== ws.handle) {
+          ws.send(JSON.stringify({ type: 'error', message: 'Only the performer or the host can pass the mic' }));
+          return;
+        }
+        advanceCypher(room);
+        return;
+      }
+
+      if (type === 'cypher-end') {
+        if (session.host !== ws.handle) {
+          ws.send(JSON.stringify({ type: 'error', message: 'Only the host can end the cypher' }));
+          return;
+        }
+        endCypher(room);
+        return;
+      }
     }
 
     if (type === 'msg') {

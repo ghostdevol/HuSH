@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { WS_BASE } from '../config';
+import { WS_BASE, API_BASE } from '../config';
 import { getToken, api } from '../api';
 import AvatarView from './AvatarView';
 
@@ -40,7 +40,8 @@ function VideoTile({ stream, label, muted }) {
   );
 }
 
-export default function ChatRoom({ room, displayName, onPresence }) {
+export default function ChatRoom({ room, displayName, me, onPresence }) {
+  const myHandle = me ? me.handle : null;
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [peers, setPeers] = useState([]);
@@ -49,6 +50,8 @@ export default function ChatRoom({ room, displayName, onPresence }) {
   const [remoteStreams, setRemoteStreams] = useState({}); // peerId -> { stream, name }
   const [videoError, setVideoError] = useState('');
   const [userMap, setUserMap] = useState({});
+  const [cypher, setCypher] = useState(null); // latest cypher-state, null when no cypher
+  const [secondsLeft, setSecondsLeft] = useState(null);
 
   const wsRef = useRef(null);
   const myPeerIdRef = useRef(null);
@@ -59,6 +62,10 @@ export default function ChatRoom({ room, displayName, onPresence }) {
   const iceQueueRef = useRef(new Map()); // peerId -> RTCIceCandidateInit[]
   const chatEndRef = useRef(null);
   const nameByPeerRef = useRef(new Map());
+  // Cypher performer mix: while I'm on the mic, my outgoing audio is
+  // mic + beat mixed in WebAudio (see startMix/stopMix).
+  const mixRef = useRef(null); // { ctx, beatEl, mixedTrack }
+  const passedTurnRef = useRef(null); // turnStartedAt already auto-passed
 
   const send = (obj) => {
     const ws = wsRef.current;
@@ -213,6 +220,110 @@ export default function ChatRoom({ room, displayName, onPresence }) {
     send({ type: 'rtc-live', live: false }); // notify the room
   };
 
+  // ---------- Cypher performer mix ----------
+  // While I'm on the mic, my peers should hear my voice OVER the beat.
+  // The mix happens here, on my device: AudioContext with my mic and a
+  // looping beat element, both into a MediaStreamDestination; that
+  // mixed audio track replaces the raw mic track on every peer
+  // connection. The beat never leaves my device as a separate stream —
+  // the room's sync IS my mix, by design.
+
+  const swapOutgoingAudio = async (track) => {
+    for (const { pc } of pcsRef.current.values()) {
+      const sender = pc.getSenders().find((s) => s.track && s.track.kind === 'audio');
+      if (sender && sender.track !== track) {
+        try { await sender.replaceTrack(track); } catch { /* pc closing */ }
+      }
+    }
+  };
+
+  const startMix = async (beatUrl) => {
+    if (mixRef.current) return;
+    const raw = localStreamRef.current;
+    if (!raw || !raw.getAudioTracks().length) return;
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      if (ctx.state === 'suspended') await ctx.resume();
+      const micSrc = ctx.createMediaStreamSource(new MediaStream([raw.getAudioTracks()[0]]));
+      const micGain = ctx.createGain();
+      micGain.gain.value = 1.0;
+      micSrc.connect(micGain);
+
+      const src = beatUrl && beatUrl.startsWith('/') ? API_BASE + beatUrl : beatUrl;
+      const beatEl = new Audio();
+      beatEl.crossOrigin = 'anonymous';
+      beatEl.loop = true;
+      beatEl.src = src;
+      const beatSrcNode = ctx.createMediaElementSource(beatEl);
+      const beatGain = ctx.createGain();
+      beatGain.gain.value = 0.75;
+      beatSrcNode.connect(beatGain);
+
+      const dest = ctx.createMediaStreamDestination();
+      micGain.connect(dest);
+      beatGain.connect(dest);
+      await beatEl.play();
+
+      const mixedTrack = dest.stream.getAudioTracks()[0];
+      mixRef.current = { ctx, beatEl, mixedTrack };
+      await swapOutgoingAudio(mixedTrack);
+      // Local tile shows my camera with the mixed audio (muted anyway).
+      const videoTrack = raw.getVideoTracks()[0];
+      setLocalStream(videoTrack ? new MediaStream([videoTrack, mixedTrack]) : dest.stream);
+    } catch (err) {
+      console.error('Cypher mix failed:', err);
+      setVideoError('Could not start the beat mix (beat failed to load for mixing).');
+      if (mixRef.current) {
+        try { mixRef.current.beatEl.pause(); } catch { /* noop */ }
+        try { mixRef.current.ctx.close(); } catch { /* noop */ }
+        mixRef.current = null;
+      }
+    }
+  };
+
+  const stopMix = async () => {
+    const mix = mixRef.current;
+    if (!mix) return;
+    mixRef.current = null;
+    try { mix.beatEl.pause(); } catch { /* noop */ }
+    try { await mix.ctx.close(); } catch { /* noop */ }
+    const raw = localStreamRef.current;
+    if (raw) {
+      if (raw.getAudioTracks().length) await swapOutgoingAudio(raw.getAudioTracks()[0]);
+      setLocalStream(raw);
+    }
+  };
+
+  // I'm on the mic + I'm live => run the mix. Mic passes => tear down.
+  const amCurrent = !!cypher && !!myHandle && cypher.current === myHandle;
+  useEffect(() => {
+    if (amCurrent && live && cypher) startMix(cypher.beatUrl);
+    if (!amCurrent && mixRef.current) stopMix();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [amCurrent, live, cypher && cypher.beatUrl]);
+
+  // Turn countdown + auto-pass when my bars run out (performer-side,
+  // per design; manual pass is always available too).
+  useEffect(() => {
+    if (!amCurrent || !cypher || !cypher.turnStartedAt || !cypher.bpm || !cypher.barsPerTurn) {
+      setSecondsLeft(null);
+      return;
+    }
+    const total = (cypher.barsPerTurn * 4 * 60) / cypher.bpm;
+    const tick = () => {
+      const left = Math.max(0, total - (Date.now() - cypher.turnStartedAt) / 1000);
+      setSecondsLeft(left);
+      if (left <= 0 && passedTurnRef.current !== cypher.turnStartedAt) {
+        passedTurnRef.current = cypher.turnStartedAt;
+        send({ type: 'cypher-pass' });
+      }
+    };
+    tick();
+    const id = setInterval(tick, 250);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [amCurrent, cypher && cypher.turnStartedAt]);
+
   // Handle -> profile map so chat bubbles can show real avatars
   // (built avatars, photos, emoji — whatever each user picked).
   useEffect(() => {
@@ -300,6 +411,15 @@ export default function ChatRoom({ room, displayName, onPresence }) {
         case 'rtc-ice':
           handleIce(data.from, data.payload);
           break;
+        case 'cypher-state':
+          if (data.room === room) setCypher(data.active ? data : null);
+          break;
+        case 'cypher-ended':
+          if (data.room === room) {
+            setCypher(null);
+            setMessages((p) => [...p, { user: 'system', text: '🎤 Cypher ended — recap posted to the feed', ts: Date.now() }]);
+          }
+          break;
         case 'error':
           console.error('Server error:', data.message);
           break;
@@ -311,6 +431,11 @@ export default function ChatRoom({ room, displayName, onPresence }) {
     ws.onerror = (err) => console.error('WebSocket error:', err);
 
     return () => {
+      if (mixRef.current) {
+        try { mixRef.current.beatEl.pause(); } catch { /* noop */ }
+        try { mixRef.current.ctx.close(); } catch { /* noop */ }
+        mixRef.current = null;
+      }
       if (localStreamRef.current) {
         localStreamRef.current.getTracks().forEach((t) => t.stop());
         localStreamRef.current = null;
@@ -334,6 +459,11 @@ export default function ChatRoom({ room, displayName, onPresence }) {
 
   const hasVideo = live || Object.keys(remoteStreams).length > 0;
 
+  // Cypher UI state
+  const inQueue = !!cypher && !!myHandle && cypher.queue.includes(myHandle);
+  const isCypherHost = !!cypher && !!myHandle && cypher.host === myHandle;
+  const turnTotal = cypher && cypher.bpm ? (cypher.barsPerTurn * 4 * 60) / cypher.bpm : 0;
+
   return (
     <div className="flex h-full flex-col">
       {/* Video strip */}
@@ -343,6 +473,85 @@ export default function ChatRoom({ room, displayName, onPresence }) {
           {Object.entries(remoteStreams).map(([peerId, entry]) => (
             <VideoTile key={peerId} stream={entry.stream} label={entry.name} />
           ))}
+        </div>
+      )}
+
+      {/* Cypher panel */}
+      {cypher && (
+        <div className="border-b border-amber-500/20 bg-amber-950/30 p-3">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="text-xs font-black uppercase tracking-wide text-amber-300">🎤 Cypher</span>
+            <span className="text-xs font-bold text-slate-200">{cypher.beatTitle}</span>
+            <span className="text-[10px] text-slate-400">{cypher.bpm} BPM · {cypher.barsPerTurn} bars a turn · hosted by @{cypher.host}</span>
+          </div>
+          <p className="mt-1.5 text-xs text-slate-300">
+            {cypher.current
+              ? <>On the mic: <span className="font-bold text-amber-200">@{cypher.current}</span>{amCurrent ? ' — that\'s you. The room hears your voice over the beat.' : ''}</>
+              : 'Mic is open — join the queue to take it.'}
+          </p>
+          {amCurrent && secondsLeft !== null && (
+            <div className="mt-2">
+              <div className="h-2 overflow-hidden rounded-full bg-white/10">
+                <div
+                  className="h-full bg-gradient-to-r from-amber-400 to-rose-500 transition-[width] duration-300"
+                  style={{ width: `${turnTotal ? Math.min(100, (secondsLeft / turnTotal) * 100) : 0}%` }}
+                />
+              </div>
+              <p className="mt-1 text-[10px] font-bold text-amber-200">{Math.ceil(secondsLeft)}s left in your turn</p>
+            </div>
+          )}
+          {cypher.queue.length > 0 && (
+            <p className="mt-1.5 text-[11px] text-slate-400">
+              Up next: {cypher.queue.map((h) => `@${h}`).join(' → ')}
+            </p>
+          )}
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {myHandle ? (
+              <>
+                {!amCurrent && !inQueue && (
+                  <button
+                    type="button"
+                    onClick={() => send({ type: 'cypher-queue-join' })}
+                    className="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-black text-black"
+                  >
+                    🎙 Join the mic queue
+                  </button>
+                )}
+                {inQueue && (
+                  <button
+                    type="button"
+                    onClick={() => send({ type: 'cypher-queue-leave' })}
+                    className="rounded-lg border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-bold text-slate-200"
+                  >
+                    Leave queue
+                  </button>
+                )}
+                {(amCurrent || isCypherHost) && (
+                  <button
+                    type="button"
+                    onClick={() => send({ type: 'cypher-pass' })}
+                    className="rounded-lg bg-rose-600 px-4 py-1.5 text-xs font-black uppercase text-white"
+                  >
+                    ⏭ Pass the mic
+                  </button>
+                )}
+                {isCypherHost && (
+                  <button
+                    type="button"
+                    onClick={() => send({ type: 'cypher-end' })}
+                    className="rounded-lg border border-rose-500/40 bg-rose-950/40 px-3 py-1.5 text-xs font-bold text-rose-200"
+                  >
+                    End cypher
+                  </button>
+                )}
+                {amCurrent && !live && (
+                  <span className="text-[11px] font-bold text-amber-200">Hit 📹 Go Live so the room can hear you.</span>
+                )}
+              </>
+            ) : (
+              <span className="text-[11px] text-slate-400">Log in to join the mic queue.</span>
+            )}
+          </div>
         </div>
       )}
 
