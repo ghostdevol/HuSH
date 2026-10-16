@@ -34,17 +34,17 @@ export default function PeoplePage({ me, go, goDm, goProfile }) {
         <p className="py-8 text-center text-sm text-slate-500">Nobody here yet.</p>
       )}
       {users.map((u) => (
-        <div key={u.handle} className="flex items-center gap-3 rounded-2xl border border-white/5 bg-white/5 p-3">
+        <div key={u.handle} className="row-card flex items-center gap-3 rounded-2xl p-3">
           <button onClick={() => goProfile(u.handle)} className="relative shrink-0">
             <AvatarView user={u} size={44} />
             {online.has(u.handle) && (
-              <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-slate-950 bg-emerald-400" />
+              <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-slate-950 bg-emerald-400 shadow-[0_0_8px_rgba(52,255,150,0.9)]" />
             )}
           </button>
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-bold text-white">
               {u.displayName} <span className="font-normal text-slate-400">@{u.handle}</span>
-              {u.isMe && <span className="ml-1 text-[10px] text-purple-300">(you)</span>}
+              {u.isMe && <span className="ml-1 text-[10px] text-rose-300">(you)</span>}
             </p>
             {u.bio && <p className="truncate text-xs text-slate-400">{u.bio}</p>}
             <p className="text-[10px] text-slate-500">
@@ -56,7 +56,7 @@ export default function PeoplePage({ me, go, goDm, goProfile }) {
               <button
                 onClick={() => toggleFollow(u)}
                 className={`rounded-lg px-3 py-1.5 text-xs font-bold ${
-                  u.following ? 'border border-white/15 bg-white/5 text-slate-300' : 'bg-purple-600 text-white'
+                  u.following ? 'border border-white/15 bg-white/5 text-slate-300' : 'bg-gradient-to-r from-rose-500 to-pink-600 text-white shadow-md shadow-rose-950/50'
                 }`}
               >
                 {u.following ? 'Following' : 'Follow'}

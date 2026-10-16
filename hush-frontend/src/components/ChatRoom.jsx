@@ -31,16 +31,16 @@ function VideoTile({ stream, label, muted }) {
     }
   }, [stream]);
   return (
-    <div className="relative w-40 shrink-0 overflow-hidden rounded-lg border border-white/10 bg-black">
+    <div className="relative w-40 shrink-0 overflow-hidden rounded-xl bg-black shadow-lg shadow-black/50 ring-1 ring-white/15">
       <video ref={ref} autoPlay playsInline muted={!!muted} className="h-28 w-full object-cover" />
-      <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1.5 py-0.5 text-[9px] font-bold text-white">
+      <span className="absolute bottom-1 left-1 rounded-md bg-black/65 px-1.5 py-0.5 text-[9px] font-bold text-white backdrop-blur-sm">
         {label}
       </span>
     </div>
   );
 }
 
-export default function ChatRoom({ room, displayName, me, onPresence }) {
+export default function ChatRoom({ room, displayName, me, onPresence, onOpenDm }) {
   const myHandle = me ? me.handle : null;
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -478,7 +478,7 @@ export default function ChatRoom({ room, displayName, me, onPresence }) {
 
       {/* Cypher panel */}
       {cypher && (
-        <div className="border-b border-amber-500/20 bg-amber-950/30 p-3">
+        <div className="border-b border-amber-500/20 bg-gradient-to-b from-amber-500/[0.13] via-amber-950/30 to-amber-950/10 p-3 shadow-[inset_0_1px_0_rgba(251,191,36,0.14)]">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <span className="text-xs font-black uppercase tracking-wide text-amber-300">🎤 Cypher</span>
             <span className="text-xs font-bold text-slate-200">{cypher.beatTitle}</span>
@@ -512,7 +512,7 @@ export default function ChatRoom({ room, displayName, me, onPresence }) {
                   <button
                     type="button"
                     onClick={() => send({ type: 'cypher-queue-join' })}
-                    className="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-black text-black"
+                    className="rounded-lg bg-gradient-to-b from-amber-400 to-amber-500 px-3 py-1.5 text-xs font-black text-black shadow-lg shadow-amber-950/50"
                   >
                     🎙 Join the mic queue
                   </button>
@@ -559,19 +559,39 @@ export default function ChatRoom({ room, displayName, me, onPresence }) {
       <div className="flex-1 space-y-3 overflow-y-auto p-4">
         {messages.map((msg, idx) => (
           <div key={idx} className={`flex flex-col ${msg.user === displayName ? 'items-end' : 'items-start'}`}>
-            <div className={`max-w-[75%] rounded-xl p-2.5 text-sm ${
+            <div className={`max-w-[75%] rounded-2xl p-2.5 text-sm ${
               msg.user === 'system'
                 ? 'bg-transparent text-center text-[11px] text-slate-500'
                 : msg.user === displayName
-                  ? 'rounded-tr-none bg-gradient-to-br from-purple-600 to-indigo-700 text-white'
-                  : 'rounded-tl-none border border-white/5 bg-white/5 text-slate-200'
+                  ? 'rounded-tr-md bg-gradient-to-br from-rose-500 to-pink-700 text-white shadow-lg shadow-rose-950/40'
+                  : 'rounded-tl-md border border-white/[0.06] bg-white/[0.06] text-slate-200 shadow-md shadow-black/30'
             }`}>
-              {msg.user !== 'system' && (
-                <span className="mb-0.5 flex items-center gap-1 text-[9px] font-bold text-slate-400">
-                  {userMap[msg.user] && <AvatarView user={userMap[msg.user]} size={14} />}
-                  {msg.user}
-                </span>
-              )}
+              {msg.user !== 'system' && (() => {
+                // Tapping a message author breaks out of the room into
+                // the 1:1 DM — only for real accounts (guests have no
+                // DM room) and never for your own messages.
+                const canDm = !!onOpenDm && !!userMap[msg.user] && msg.user !== displayName;
+                const inner = (
+                  <>
+                    {userMap[msg.user] && <AvatarView user={userMap[msg.user]} size={14} />}
+                    {msg.user}
+                  </>
+                );
+                return canDm ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpenDm(msg.user)}
+                    title={`Message @${msg.user} privately`}
+                    className="mb-0.5 flex items-center gap-1 text-[9px] font-bold text-slate-400 transition hover:text-rose-300"
+                  >
+                    {inner}
+                  </button>
+                ) : (
+                  <span className="mb-0.5 flex items-center gap-1 text-[9px] font-bold text-slate-400">
+                    {inner}
+                  </span>
+                );
+              })()}
               <p className="leading-relaxed">{msg.text}</p>
             </div>
           </div>
@@ -582,13 +602,13 @@ export default function ChatRoom({ room, displayName, me, onPresence }) {
       {videoError && <p className="px-4 pb-1 text-[11px] text-rose-400">{videoError}</p>}
 
       {/* Input row */}
-      <form onSubmit={handleSend} className="flex items-center gap-2 border-t border-white/5 bg-slate-950/60 p-3">
+      <form onSubmit={handleSend} className="flex items-center gap-2 border-t border-white/[0.06] bg-[#070a12]/85 p-3 backdrop-blur-xl">
         {live ? (
-          <button type="button" onClick={stopVideo} className="shrink-0 rounded-lg bg-rose-600 px-3 py-2 text-xs font-bold text-white">
+          <button type="button" onClick={stopVideo} className="shrink-0 rounded-lg bg-rose-600 px-3 py-2 text-xs font-bold text-white shadow-lg shadow-rose-950/50">
             Kill Cam
           </button>
         ) : (
-          <button type="button" onClick={startVideo} className="shrink-0 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-bold text-slate-200">
+          <button type="button" onClick={startVideo} className="shrink-0 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-bold text-slate-200 shadow-md shadow-black/30">
             📹 Go Live
           </button>
         )}
@@ -597,17 +617,37 @@ export default function ChatRoom({ room, displayName, me, onPresence }) {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder={`Message ${room}...`}
-          className="flex-1 rounded-xl border border-white/5 bg-white/5 px-4 py-2 text-sm text-slate-100 outline-none focus:border-rose-500/40"
+          className="flex-1 rounded-xl border border-white/[0.06] bg-white/[0.05] px-4 py-2 text-sm text-slate-100 outline-none"
         />
-        <button type="submit" className="shrink-0 rounded-xl bg-gradient-to-r from-rose-500 to-purple-600 px-4 py-2 text-xs font-bold uppercase text-white">
+        <button type="submit" className="shrink-0 rounded-xl bg-gradient-to-r from-rose-500 to-pink-600 px-4 py-2 text-xs font-bold uppercase text-white shadow-lg shadow-rose-950/50">
           Send
         </button>
       </form>
 
       {peers.length > 0 && (
-        <p className="border-t border-white/5 px-3 py-1 text-[10px] text-slate-500">
-          In room: {peers.map((p) => `${p.name}${p.live ? ' 📹' : ''}`).join(', ')}
-        </p>
+        <div className="flex flex-wrap items-center gap-1.5 border-t border-white/[0.06] px-3 py-1.5 text-[10px] text-slate-500">
+          <span className="font-bold uppercase tracking-wide">In room:</span>
+          {peers.map((p) => {
+            // Account members are tappable → straight into the 1:1 DM.
+            // Guests have no DM room, so they stay plain text.
+            const canDm = !!onOpenDm && !!userMap[p.name];
+            const label = `${p.name}${p.live ? ' 📹' : ''}`;
+            return canDm ? (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => onOpenDm(p.name)}
+                title={`Message @${p.name} privately`}
+                className="rounded-full bg-white/[0.05] px-2 py-0.5 font-bold text-slate-300 ring-1 ring-white/10 transition hover:bg-rose-500/15 hover:text-rose-200 hover:ring-rose-400/30"
+              >
+                @{label} ✉️
+              </button>
+            ) : (
+              <span key={p.id} className="px-1">{label}</span>
+            );
+          })}
+          {!!onOpenDm && <span className="text-slate-600">tap a name for a private DM</span>}
+        </div>
       )}
     </div>
   );

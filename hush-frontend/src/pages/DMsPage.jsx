@@ -20,7 +20,7 @@ export default function DMsPage({ me, go, dmTarget, setDmTarget }) {
     return (
       <div className="mx-auto w-full max-w-xl p-6 text-center">
         <p className="mb-4 text-sm text-slate-400">Direct messages need an account so the other side knows who you are.</p>
-        <button onClick={() => go('profile')} className="rounded-xl bg-gradient-to-r from-rose-500 to-purple-600 px-5 py-2.5 text-sm font-bold text-white">
+        <button onClick={() => go('profile')} className="rounded-xl bg-gradient-to-r from-rose-500 to-pink-600 px-5 py-2.5 text-sm font-bold text-white shadow-lg shadow-rose-950/50">
           Log in / Register
         </button>
       </div>
@@ -55,19 +55,19 @@ export default function DMsPage({ me, go, dmTarget, setDmTarget }) {
         <button
           key={u.handle}
           onClick={() => setDmTarget(u.handle)}
-          className="flex w-full items-center gap-3 rounded-2xl border border-white/5 bg-white/5 p-3 text-left"
+          className="row-card flex w-full items-center gap-3 rounded-2xl p-3 text-left"
         >
           <span className="relative shrink-0">
             <AvatarView user={u} size={40} />
             {online.has(u.handle) && (
-              <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-slate-950 bg-emerald-400" />
+              <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-slate-950 bg-emerald-400 shadow-[0_0_8px_rgba(52,255,150,0.9)]" />
             )}
           </span>
           <span className="min-w-0">
             <span className="block truncate text-sm font-bold text-white">{u.displayName}</span>
             <span className="block truncate text-[11px] text-slate-400">@{u.handle}{u.bio ? ` • ${u.bio}` : ''}</span>
           </span>
-          <span className="ml-auto text-xs font-bold text-purple-300">Message →</span>
+          <span className="ml-auto text-xs font-bold text-rose-300">Message →</span>
         </button>
       ))}
     </div>

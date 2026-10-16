@@ -110,9 +110,9 @@ export default function Frame({ theme, children, className = '' }) {
   }
   if (theme.frame === 'corners') {
     const glyph = CORNER_GLYPHS[theme.id] || '✦';
-    const corner = 'pointer-events-none absolute z-10 text-sm leading-none';
+    const corner = 'pointer-events-none absolute z-10 text-sm leading-none [filter:drop-shadow(0_2px_6px_rgba(0,0,0,0.75))]';
     return (
-      <div className={`relative rounded-2xl border`} style={borderStyle}>
+      <div className={`relative rounded-2xl border shadow-xl shadow-black/30`} style={borderStyle}>
         <span className={`${corner} -left-1.5 -top-1.5`}>{glyph}</span>
         <span className={`${corner} -right-1.5 -top-1.5`}>{glyph}</span>
         <span className={`${corner} -bottom-1.5 -left-1.5`}>{glyph}</span>
@@ -134,7 +134,7 @@ export default function Frame({ theme, children, className = '' }) {
   }
   if (theme.frame === 'stripe') {
     return (
-      <div className="relative overflow-hidden rounded-2xl border" style={borderStyle}>
+      <div className="relative overflow-hidden rounded-2xl border shadow-xl shadow-black/30" style={borderStyle}>
         <div className="h-1.5 w-full" style={{ background: `linear-gradient(90deg, transparent, ${theme.accent}, transparent)` }} />
         <div className={className}>{children}</div>
       </div>
@@ -142,7 +142,7 @@ export default function Frame({ theme, children, className = '' }) {
   }
   // plain
   return (
-    <div className="rounded-2xl border" style={borderStyle}>
+    <div className="rounded-2xl border shadow-xl shadow-black/30" style={borderStyle}>
       <div className={className}>{children}</div>
     </div>
   );

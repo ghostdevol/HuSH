@@ -79,13 +79,13 @@ function ProfileMusic({ profile }) {
   if (!direct) {
     // Page link (e.g. BandLab): a real link out, never a dead player.
     return (
-      <div className="sticky top-2 z-10 flex items-center gap-3 rounded-2xl border border-purple-500/25 bg-slate-900/95 p-3 shadow-xl">
+      <div className="sticky top-2 z-10 flex items-center gap-3 rounded-2xl border border-rose-400/25 bg-slate-900/95 p-3 shadow-2xl shadow-black/50 backdrop-blur">
         <span className="text-xl">🎵</span>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-bold text-white">{title}</p>
           <p className="text-[10px] text-slate-400">Profile track</p>
         </div>
-        <a href={url} target="_blank" rel="noreferrer" className="shrink-0 rounded-lg bg-purple-600 px-3 py-2 text-xs font-bold text-white">
+        <a href={url} target="_blank" rel="noreferrer" className="shrink-0 rounded-lg bg-gradient-to-r from-rose-500 to-pink-600 px-3 py-2 text-xs font-bold text-white shadow-md shadow-rose-950/50">
           Open track ↗
         </a>
       </div>
@@ -112,7 +112,7 @@ function ProfileMusic({ profile }) {
   };
 
   return (
-    <div className="sticky top-2 z-10 rounded-2xl border border-purple-500/25 bg-slate-900/95 p-3 shadow-xl">
+    <div className="sticky top-2 z-10 rounded-2xl border border-rose-400/25 bg-gradient-to-b from-rose-500/[0.08] to-slate-900/95 p-3 shadow-2xl shadow-black/50 backdrop-blur">
       <div className="flex items-center gap-3">
         <span className="text-xl">🎵</span>
         <div className="min-w-0 flex-1">
@@ -166,14 +166,14 @@ function AuthForms({ onAuth }) {
 
   return (
     <div className="mx-auto w-full max-w-md p-4">
-      <div className="rounded-2xl border border-white/5 bg-white/5 p-5">
+      <div className="grad-card rounded-[22px] p-5">
         <h2 className="mb-1 text-lg font-black">🤫 HuSH</h2>
         <p className="mb-4 text-xs text-slate-400">
           {mode === 'register' ? 'Pick a handle and password. That is the whole form.' : 'Welcome back.'}
         </p>
         <div className="mb-4 flex rounded-xl border border-white/10 bg-slate-900 p-1">
           {['login', 'register'].map((m) => (
-            <button key={m} onClick={() => setMode(m)} className={`flex-1 rounded-lg py-1.5 text-xs font-bold uppercase ${mode === m ? 'bg-purple-600 text-white' : 'text-slate-400'}`}>
+            <button key={m} onClick={() => setMode(m)} className={`flex-1 rounded-lg py-1.5 text-xs font-bold uppercase ${mode === m ? 'bg-rose-600 text-white shadow-md shadow-rose-950/50' : 'text-slate-400'}`}>
               {m}
             </button>
           ))}
@@ -185,7 +185,7 @@ function AuthForms({ onAuth }) {
           )}
           <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password (4+ characters)" autoComplete={mode === 'register' ? 'new-password' : 'current-password'} className="w-full rounded-xl border border-white/10 bg-slate-900 px-3 py-2.5 text-sm text-slate-100 outline-none" />
           {error && <p className="text-xs text-rose-400">{error}</p>}
-          <button type="submit" disabled={busy} className="w-full rounded-xl bg-gradient-to-r from-rose-500 to-purple-600 py-2.5 text-sm font-bold uppercase text-white disabled:opacity-50">
+          <button type="submit" disabled={busy} className="w-full rounded-xl bg-gradient-to-r from-rose-500 to-pink-600 py-2.5 text-sm font-bold uppercase text-white shadow-lg shadow-rose-950/50 disabled:opacity-50">
             {mode === 'register' ? 'Create account' : 'Log in'}
           </button>
         </form>
@@ -271,7 +271,7 @@ export default function ProfilePage({ me, onAuth, targetHandle, go, goDm }) {
 
   const bannerPhoto = userPhotos.find((p) => p.id === profile.bannerPhotoId);
   const theme = getTheme(profile.themeId);
-  const cardStyle = { backgroundColor: theme.cardBg, borderColor: theme.frameColor };
+  const cardStyle = { background: theme.cardGradient || theme.cardBg, borderColor: theme.frameColor };
   const pinnedPost = profile.pinnedPostId ? userPosts.find((p) => p.id === profile.pinnedPostId) : null;
   const restPosts = pinnedPost ? userPosts.filter((p) => p.id !== pinnedPost.id) : userPosts;
 
@@ -418,27 +418,30 @@ export default function ProfilePage({ me, onAuth, targetHandle, go, goDm }) {
       <PatternLayer theme={theme} />
       <div className="relative space-y-4 p-4">
       {/* Banner */}
-      <div className="relative h-32 overflow-hidden rounded-2xl border border-white/5" style={{ backgroundColor: profile.bannerColor }}>
+      <div className="relative h-32 overflow-hidden rounded-[22px] shadow-xl shadow-black/40 ring-1 ring-white/10" style={{ backgroundColor: profile.bannerColor }}>
         {bannerPhoto && (
           <img src={resolveUrl(bannerPhoto.url)} alt="Profile banner" className="absolute inset-0 h-full w-full object-cover" />
         )}
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-white/[0.07]" />
         {profile.bannerEmoji && (
-          <span className="absolute bottom-2 right-4 text-6xl drop-shadow-lg">{profile.bannerEmoji}</span>
+          <span className="absolute bottom-2 right-4 text-6xl [filter:drop-shadow(0_10px_18px_rgba(0,0,0,0.65))]">{profile.bannerEmoji}</span>
         )}
       </div>
 
       {/* Identity card */}
       <Frame theme={theme}>
-      <div className="flex items-start gap-4 p-3" style={{ backgroundColor: theme.cardBg }}>
+      <div className="flex items-start gap-4 p-3" style={{ background: theme.cardGradient || theme.cardBg }}>
         <AvatarView user={profile} size={72} />
         <div className="min-w-0 flex-1">
           <h2 className="truncate text-xl font-black" style={{ color: profile.accentColor }}>{profile.displayName}</h2>
           <p className="text-sm text-slate-400">@{profile.handle}</p>
           {profile.statusLine && <p className="mt-0.5 text-sm italic text-slate-300">“{profile.statusLine}”</p>}
           {profile.bio && <p className="mt-1 whitespace-pre-wrap text-sm text-slate-300">{profile.bio}</p>}
-          <p className="mt-1 text-[11px] text-slate-500">
-            {profile.followerCount} followers • {profile.followingCount} following • {profile.postCount} posts
-          </p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            <span className="rounded-full bg-black/25 px-2.5 py-0.5 text-[11px] font-bold text-slate-300 ring-1 ring-white/10"><span className="text-white">{profile.followerCount}</span> followers</span>
+            <span className="rounded-full bg-black/25 px-2.5 py-0.5 text-[11px] font-bold text-slate-300 ring-1 ring-white/10"><span className="text-white">{profile.followingCount}</span> following</span>
+            <span className="rounded-full bg-black/25 px-2.5 py-0.5 text-[11px] font-bold text-slate-300 ring-1 ring-white/10"><span className="text-white">{profile.postCount}</span> posts</span>
+          </div>
           {profile.links.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-1.5">
               {profile.links.map((l, i) => (
@@ -455,7 +458,7 @@ export default function ProfilePage({ me, onAuth, targetHandle, go, goDm }) {
           </button>
         ) : (
           <div className="flex shrink-0 flex-col gap-1.5">
-            <button onClick={toggleFollow} className="rounded-lg px-3 py-1.5 text-xs font-bold text-white" style={{ backgroundColor: theme.accent }}>
+            <button onClick={toggleFollow} className="rounded-lg px-3 py-1.5 text-xs font-bold text-white shadow-lg shadow-black/40" style={{ backgroundColor: theme.accent }}>
               {profile.following ? 'Following ✓' : 'Follow'}
             </button>
             <button onClick={() => (me ? goDm(profile.handle) : go('profile'))} className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-bold text-slate-200">
@@ -476,14 +479,14 @@ export default function ProfilePage({ me, onAuth, targetHandle, go, goDm }) {
       {/* Pinned post */}
       {pinnedPost && (
         <div>
-          <p className="mb-1.5 text-[11px] font-black uppercase tracking-widest text-slate-500">📌 Pinned</p>
+          <p className="eyebrow mb-2">📌 Pinned</p>
           <PostCard post={pinnedPost} me={me} onNeedLogin={() => go('profile')} onPin={isOwn ? togglePin : undefined} pinned cardStyle={cardStyle} />
         </div>
       )}
 
       {/* Posts */}
       <div className="space-y-3">
-        <h3 className="text-sm font-black uppercase tracking-wide text-slate-300">
+        <h3 className="eyebrow">
           {isOwn ? 'Your posts' : `${profile.displayName}'s posts`}
         </h3>
         {restPosts.length === 0 && !pinnedPost && <p className="text-sm text-slate-500">No posts yet.</p>}
@@ -494,11 +497,11 @@ export default function ProfilePage({ me, onAuth, targetHandle, go, goDm }) {
 
       {/* Photo bucket */}
       <div>
-        <h3 className="mb-2 text-sm font-black uppercase tracking-wide text-slate-300">📸 Photo bucket</h3>
+        <h3 className="eyebrow mb-2">📸 Photo bucket</h3>
         {isOwn && (
           <div className="mb-2 flex gap-2">
             <input value={photoCaption} onChange={(e) => setPhotoCaption(e.target.value)} placeholder="Caption for the next photo…" className="flex-1 rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-xs text-slate-100 outline-none" />
-            <label className={`cursor-pointer rounded-lg bg-purple-600 px-3 py-2 text-xs font-bold text-white ${uploading ? 'opacity-50' : ''}`}>
+            <label className={`cursor-pointer rounded-lg bg-gradient-to-r from-rose-500 to-pink-600 px-3 py-2 text-xs font-bold text-white shadow-md shadow-rose-950/50 ${uploading ? 'opacity-50' : ''}`}>
               {uploading ? 'Uploading…' : '＋ Upload'}
               <input type="file" accept="image/*" onChange={uploadPhoto} className="hidden" disabled={uploading} />
             </label>
@@ -507,10 +510,10 @@ export default function ProfilePage({ me, onAuth, targetHandle, go, goDm }) {
         {userPhotos.length === 0 && <p className="text-sm text-slate-500">No photos in the bucket yet.</p>}
         <div className="grid grid-cols-3 gap-2">
           {userPhotos.map((photo) => (
-            <button key={photo.id} onClick={() => isOwn && setSelectedPhoto(photo)} className="group relative overflow-hidden rounded-xl border border-white/10">
-              <img src={resolveUrl(photo.url)} alt={photo.caption || 'Bucket photo'} className="h-24 w-full object-cover" />
+            <button key={photo.id} onClick={() => isOwn && setSelectedPhoto(photo)} className="group relative overflow-hidden rounded-xl shadow-md shadow-black/30 ring-1 ring-white/10">
+              <img src={resolveUrl(photo.url)} alt={photo.caption || 'Bucket photo'} className="h-24 w-full object-cover transition duration-300 group-hover:scale-105" />
               {photo.caption && <span className="absolute inset-x-0 bottom-0 truncate bg-black/60 px-1.5 py-0.5 text-left text-[10px] text-white">{photo.caption}</span>}
-              {profile.bannerPhotoId === photo.id && <span className="absolute right-1 top-1 rounded bg-purple-600 px-1 text-[9px] font-bold text-white">BANNER</span>}
+              {profile.bannerPhotoId === photo.id && <span className="absolute right-1 top-1 rounded bg-rose-600 px-1 text-[9px] font-bold text-white">BANNER</span>}
             </button>
           ))}
         </div>
@@ -518,7 +521,7 @@ export default function ProfilePage({ me, onAuth, targetHandle, go, goDm }) {
           <div className="mt-2 flex flex-wrap items-center gap-2 rounded-xl border border-white/10 bg-white/5 p-2.5">
             <span className="text-xs text-slate-300">{selectedPhoto.caption || '(no caption)'}</span>
             <span className="ml-auto flex gap-1.5">
-              <button onClick={() => photoToFeed(selectedPhoto)} className="rounded-lg bg-purple-600 px-2.5 py-1.5 text-[11px] font-bold text-white">Post to feed</button>
+              <button onClick={() => photoToFeed(selectedPhoto)} className="rounded-lg bg-gradient-to-r from-rose-500 to-pink-600 px-2.5 py-1.5 text-[11px] font-bold text-white shadow-md shadow-rose-950/50">Post to feed</button>
               <button onClick={() => setBanner(selectedPhoto)} className="rounded-lg border border-white/15 bg-white/5 px-2.5 py-1.5 text-[11px] font-bold text-slate-200">Set as banner</button>
               <button onClick={() => deletePhoto(selectedPhoto)} className="rounded-lg bg-rose-600 px-2.5 py-1.5 text-[11px] font-bold text-white">Delete</button>
             </span>
@@ -528,11 +531,11 @@ export default function ProfilePage({ me, onAuth, targetHandle, go, goDm }) {
 
       {/* Tracks */}
       <div>
-        <h3 className="mb-2 text-sm font-black uppercase tracking-wide text-slate-300">🎵 Tracks</h3>
+        <h3 className="eyebrow mb-2">🎵 Tracks</h3>
         {isOwn && (
           <div className="mb-2 flex gap-2">
             <input value={trackTitleInput} onChange={(e) => setTrackTitleInput(e.target.value)} placeholder="Title for the next track…" className="flex-1 rounded-lg border border-white/10 bg-slate-900 px-3 py-2 text-xs text-slate-100 outline-none" />
-            <label className={`cursor-pointer rounded-lg bg-purple-600 px-3 py-2 text-xs font-bold text-white ${uploading ? 'opacity-50' : ''}`}>
+            <label className={`cursor-pointer rounded-lg bg-gradient-to-r from-rose-500 to-pink-600 px-3 py-2 text-xs font-bold text-white shadow-md shadow-rose-950/50 ${uploading ? 'opacity-50' : ''}`}>
               {uploading ? 'Uploading…' : '＋ Upload'}
               <input type="file" accept="audio/*,.mp3,.m4a,.wav" onChange={uploadTrack} className="hidden" disabled={uploading} />
             </label>
@@ -541,10 +544,10 @@ export default function ProfilePage({ me, onAuth, targetHandle, go, goDm }) {
         {userTracks.length === 0 && <p className="text-sm text-slate-500">No uploaded tracks yet.</p>}
         <div className="space-y-2">
           {userTracks.map((track) => (
-            <div key={track.id} className="rounded-xl border border-white/5 bg-white/5 p-3">
+            <div key={track.id} className="row-card rounded-2xl p-3">
               <div className="mb-1.5 flex items-center gap-2">
                 <p className="min-w-0 flex-1 truncate text-sm font-bold text-slate-100">{track.title}</p>
-                {profile.trackUrl === track.url && <span className="shrink-0 rounded bg-purple-600 px-1.5 py-0.5 text-[9px] font-bold text-white">PROFILE TRACK</span>}
+                {profile.trackUrl === track.url && <span className="shrink-0 rounded bg-rose-600 px-1.5 py-0.5 text-[9px] font-bold text-white">PROFILE TRACK</span>}
                 {isOwn && (
                   <>
                     <button onClick={() => setProfileTrack(track)} className="shrink-0 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-[11px] font-bold text-slate-200">Set as profile track</button>
@@ -560,14 +563,14 @@ export default function ProfilePage({ me, onAuth, targetHandle, go, goDm }) {
 
       {/* Edit panel — own profile only */}
       {isOwn && draft && (
-        <form onSubmit={saveProfile} className="space-y-4 rounded-2xl border border-white/5 bg-white/5 p-5">
-          <h3 className="text-sm font-black uppercase tracking-wide text-slate-300">Build your page</h3>
+        <form onSubmit={saveProfile} className="glass-card space-y-4 rounded-[22px] p-5">
+          <h3 className="eyebrow">Build your page</h3>
 
           <div>
             <p className="mb-1.5 text-[11px] font-bold text-slate-500">AVATAR</p>
             <div className="mb-3 flex gap-1.5">
               {['emoji', 'builder', 'photo'].map((m) => (
-                <button type="button" key={m} onClick={() => setDraft({ ...draft, avatarMode: m })} className={`rounded-lg px-3 py-1.5 text-xs font-bold capitalize ${draft.avatarMode === m ? 'bg-purple-600 text-white' : 'border border-white/10 bg-slate-900 text-slate-300'}`}>
+                <button type="button" key={m} onClick={() => setDraft({ ...draft, avatarMode: m })} className={`rounded-lg px-3 py-1.5 text-xs font-bold capitalize ${draft.avatarMode === m ? 'bg-rose-600 text-white shadow-md shadow-rose-950/50' : 'border border-white/10 bg-slate-900 text-slate-300'}`}>
                   {m === 'emoji' ? '😀 Emoji' : m === 'builder' ? '🧑 Builder' : '📸 Photo'}
                 </button>
               ))}
@@ -575,7 +578,7 @@ export default function ProfilePage({ me, onAuth, targetHandle, go, goDm }) {
             {draft.avatarMode === 'emoji' && (
               <div className="flex flex-wrap gap-1.5">
                 {AVATARS.map((emoji) => (
-                  <button type="button" key={emoji} onClick={() => setDraft({ ...draft, avatarEmoji: emoji })} className={`flex h-9 w-9 items-center justify-center rounded-lg text-lg ${draft.avatarEmoji === emoji ? 'border border-purple-400 bg-purple-500/20' : 'border border-white/10 bg-slate-900'}`}>
+                  <button type="button" key={emoji} onClick={() => setDraft({ ...draft, avatarEmoji: emoji })} className={`flex h-9 w-9 items-center justify-center rounded-lg text-lg ${draft.avatarEmoji === emoji ? 'border border-rose-400 bg-rose-500/20' : 'border border-white/10 bg-slate-900'}`}>
                     {emoji}
                   </button>
                 ))}
@@ -591,7 +594,7 @@ export default function ProfilePage({ me, onAuth, targetHandle, go, goDm }) {
                   <div className="flex flex-wrap gap-2">
                     {userPhotos.map((photo) => (
                       <button type="button" key={photo.id} onClick={() => setDraft({ ...draft, avatarPhotoId: photo.id })}>
-                        <img src={resolveUrl(photo.url)} alt={photo.caption || 'Pick avatar photo'} className={`h-14 w-14 rounded-full object-cover border-2 ${draft.avatarPhotoId === photo.id ? 'border-purple-400' : 'border-white/15'}`} />
+                        <img src={resolveUrl(photo.url)} alt={photo.caption || 'Pick avatar photo'} className={`h-14 w-14 rounded-full object-cover border-2 ${draft.avatarPhotoId === photo.id ? 'border-rose-400' : 'border-white/15'}`} />
                       </button>
                     ))}
                   </div>
@@ -679,7 +682,7 @@ export default function ProfilePage({ me, onAuth, targetHandle, go, goDm }) {
             <p className="mt-1 text-[10px] text-slate-500">Themes reskin your whole profile page for every visitor.</p>
           </div>
 
-          <button type="submit" className="rounded-xl bg-gradient-to-r from-rose-500 to-purple-600 px-5 py-2.5 text-xs font-bold uppercase text-white">
+          <button type="submit" className="rounded-xl bg-gradient-to-r from-rose-500 to-pink-600 px-5 py-2.5 text-xs font-bold uppercase text-white shadow-lg shadow-rose-950/50">
             Save profile
           </button>
         </form>

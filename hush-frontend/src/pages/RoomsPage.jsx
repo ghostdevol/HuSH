@@ -10,7 +10,7 @@ const DEFAULT_ROOMS = [
   { id: 'vip', name: '👑 VIP Chambers' }
 ];
 
-export default function RoomsPage({ me, guestName, setGuestName, onPresence }) {
+export default function RoomsPage({ me, guestName, setGuestName, onPresence, goDm }) {
   const [activeRoom, setActiveRoom] = useState('lobby');
   const [rooms, setRooms] = useState(DEFAULT_ROOMS);
   const [newRoom, setNewRoom] = useState('');
@@ -79,8 +79,8 @@ export default function RoomsPage({ me, guestName, setGuestName, onPresence }) {
               onClick={() => setActiveRoom(room.id)}
               className={`rounded-full px-3 py-1.5 text-xs font-bold ${
                 activeRoom === room.id
-                  ? 'bg-gradient-to-r from-rose-500/30 to-purple-500/30 text-rose-200 border border-rose-500/30'
-                  : 'border border-white/10 bg-white/5 text-slate-400'
+                  ? 'bg-gradient-to-r from-rose-500/30 to-pink-500/30 text-rose-200 border border-rose-500/30 shadow-[0_0_12px_rgba(244,63,94,0.25)]'
+                  : 'border border-white/10 bg-white/5 text-slate-400 hover:bg-white/10'
               }`}
             >
               {room.name}
@@ -94,7 +94,7 @@ export default function RoomsPage({ me, guestName, setGuestName, onPresence }) {
             placeholder="New room name…"
             className="flex-1 rounded-lg border border-white/10 bg-slate-900 px-3 py-1.5 text-xs text-slate-100 outline-none"
           />
-          <button type="submit" className="rounded-lg bg-purple-600 px-3 py-1.5 text-xs font-bold text-white">
+          <button type="submit" className="rounded-lg bg-gradient-to-r from-rose-500 to-pink-600 px-3 py-1.5 text-xs font-bold text-white shadow-md shadow-rose-950/50">
             Create / Join
           </button>
         </form>
@@ -109,7 +109,7 @@ export default function RoomsPage({ me, guestName, setGuestName, onPresence }) {
                 🎤 Host a cypher
               </button>
             ) : (
-              <form onSubmit={createCypher} className="space-y-2 rounded-xl border border-amber-500/20 bg-amber-950/20 p-3">
+              <form onSubmit={createCypher} className="space-y-2 rounded-2xl border border-amber-500/25 bg-gradient-to-b from-amber-500/[0.08] to-amber-950/20 p-3 shadow-lg shadow-black/30">
                 <p className="text-xs font-black uppercase tracking-wide text-amber-300">🎤 New cypher room</p>
                 <input
                   value={cRoom}
@@ -190,7 +190,7 @@ export default function RoomsPage({ me, guestName, setGuestName, onPresence }) {
         )}
       </div>
       <div className="min-h-0 flex-1">
-        <ChatRoom key={activeRoom + displayName} room={activeRoom} displayName={displayName} me={me} onPresence={onPresence} />
+        <ChatRoom key={activeRoom + displayName} room={activeRoom} displayName={displayName} me={me} onPresence={onPresence} onOpenDm={me && goDm ? goDm : undefined} />
       </div>
     </div>
   );

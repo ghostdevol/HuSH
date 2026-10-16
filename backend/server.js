@@ -203,8 +203,13 @@ const AVATAR_SLOTS = {
   mouth: ['smile', 'grin', 'flat', 'open', 'smirk'],
   accessory: ['none', 'glasses', 'shades', 'cap', 'headphones']
 };
+// Menagerie kinds (2026-10-15): `kind` picks the avatar's form and
+// `kindColor` its body color. Both are additive — pre-menagerie specs
+// have neither and default to a human, exactly as before.
+const AVATAR_KINDS = ['human', 'ghost', 'skull', 'robot', 'cat', 'wolf', 'alien', 'dragon', 'pumpkin'];
 const AVATAR_DEFAULT = {
-  style: 'builder', skin: '#f1c27d', hairStyle: 'short', hairColor: '#3b2314',
+  style: 'builder', kind: 'human', kindColor: '#e8edf2',
+  skin: '#f1c27d', hairStyle: 'short', hairColor: '#3b2314',
   eyes: 'dots', mouth: 'smile', accessory: 'none', bgColor: '#312e81'
 };
 
@@ -218,6 +223,10 @@ function validateAvatar(spec) {
   }
   if (typeof spec.bgColor !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(spec.bgColor)) return null;
   out.bgColor = spec.bgColor;
+  out.kind = AVATAR_KINDS.includes(spec.kind) ? spec.kind : 'human';
+  out.kindColor = (typeof spec.kindColor === 'string' && /^#[0-9a-fA-F]{6}$/.test(spec.kindColor))
+    ? spec.kindColor
+    : AVATAR_DEFAULT.kindColor;
   return out;
 }
 

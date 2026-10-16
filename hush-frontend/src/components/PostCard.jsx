@@ -59,7 +59,7 @@ export default function PostCard({ post, me, onNeedLogin, onPin, pinned, cardSty
   };
 
   return (
-    <article className="rounded-2xl border border-white/5 bg-white/5 p-4" style={cardStyle}>
+    <article className="grad-card rounded-[22px] p-4" style={cardStyle}>
       <header className="mb-2 flex items-center gap-2.5">
         <AvatarView user={post.author} size={36} />
         <div className="min-w-0">
@@ -70,7 +70,7 @@ export default function PostCard({ post, me, onNeedLogin, onPin, pinned, cardSty
           <button
             onClick={() => onPin(post)}
             className={`ml-auto shrink-0 rounded-lg px-2.5 py-1 text-[11px] font-bold ${
-              pinned ? 'bg-purple-600 text-white' : 'border border-white/10 bg-white/5 text-slate-300'
+              pinned ? 'bg-rose-600 text-white shadow-md shadow-rose-950/50' : 'border border-white/10 bg-white/5 text-slate-300'
             }`}
           >
             {pinned ? '📌 Pinned' : '📌 Pin'}
@@ -84,15 +84,19 @@ export default function PostCard({ post, me, onNeedLogin, onPin, pinned, cardSty
         <img
           src={API_BASE + post.photo.url}
           alt={post.photo.caption || 'Post photo'}
-          className="mt-2 max-h-96 w-full rounded-xl border border-white/10 object-cover"
+          className="mt-2 max-h-96 w-full rounded-2xl object-cover shadow-lg shadow-black/40 ring-1 ring-white/10"
         />
       )}
 
-      <div className="mt-3 flex items-center gap-4">
-        <button onClick={toggleLike} className={`text-xs font-bold ${liked ? 'text-rose-400' : 'text-slate-400'}`}>
+      <div className="mt-3 flex items-center gap-2">
+        <button onClick={toggleLike} className={`rounded-full px-3 py-1.5 text-xs font-bold ring-1 ${
+          liked
+            ? 'bg-rose-500/15 text-rose-300 ring-rose-400/30'
+            : 'bg-white/[0.04] text-slate-400 ring-white/[0.07] hover:bg-white/[0.08]'
+        }`}>
           {liked ? '❤️' : '🤍'} {likeCount}
         </button>
-        <button onClick={loadComments} className="text-xs font-bold text-slate-400">
+        <button onClick={loadComments} className="rounded-full bg-white/[0.04] px-3 py-1.5 text-xs font-bold text-slate-400 ring-1 ring-white/[0.07] hover:bg-white/[0.08]">
           💬 {commentCount} comments
         </button>
       </div>
@@ -120,7 +124,7 @@ export default function PostCard({ post, me, onNeedLogin, onPin, pinned, cardSty
               disabled={!me}
               className="flex-1 rounded-lg border border-white/10 bg-slate-900 px-3 py-1.5 text-xs text-slate-100 outline-none disabled:opacity-50"
             />
-            <button type="submit" disabled={busy || !me} className="rounded-lg bg-purple-600 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-50">
+            <button type="submit" disabled={busy || !me} className="rounded-lg bg-gradient-to-r from-rose-500 to-pink-600 px-3 py-1.5 text-xs font-bold text-white shadow-md shadow-rose-950/50 disabled:opacity-50">
               Post
             </button>
           </form>

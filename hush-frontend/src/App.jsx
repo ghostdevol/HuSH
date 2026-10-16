@@ -66,26 +66,26 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden bg-[#04060a] font-sans text-slate-100">
-      <header className="flex h-12 shrink-0 items-center justify-between border-b border-white/5 bg-slate-950/90 px-4">
-        <div className="flex items-center gap-2">
+    <div className="flex h-screen w-screen flex-col overflow-hidden font-sans text-slate-100">
+      <header className="glass-card z-20 mx-3 mt-3 flex h-14 shrink-0 items-center justify-between rounded-2xl px-3">
+        <div className="flex items-center gap-2.5">
           <button onClick={() => setDrawerOpen(true)} className="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-sm text-slate-200" aria-label="Open menu">
             ☰
           </button>
-          <span className="text-lg">🤫</span>
-          <h1 className="bg-gradient-to-r from-rose-400 to-purple-500 bg-clip-text text-sm font-black tracking-wider text-transparent">
+          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-rose-500 to-pink-600 text-lg shadow-lg shadow-rose-950/50 ring-1 ring-white/25">🤫</span>
+          <h1 className="bg-gradient-to-r from-rose-300 to-pink-500 bg-clip-text text-sm font-black tracking-[0.18em] text-transparent">
             HuSH
           </h1>
         </div>
         <div className="flex items-center gap-3 text-[11px] text-slate-400">
-          {onlineCount > 0 && <span><span className="text-emerald-400">●</span> {onlineCount} online</span>}
+          {onlineCount > 0 && <span className="flex items-center gap-1.5"><span className="live-dot" /> {onlineCount} online</span>}
           {me
-            ? <span className="flex items-center gap-1.5"><AvatarView user={me} size={20} /><span className="font-bold text-slate-200">@{me.handle}</span></span>
-            : <button onClick={() => { setProfileTarget(null); setPage('profile'); }} className="font-bold text-purple-300">Log in</button>}
+            ? <span className="flex items-center gap-1.5"><AvatarView user={me} size={22} /><span className="font-bold text-slate-200">@{me.handle}</span></span>
+            : <button onClick={() => { setProfileTarget(null); setPage('profile'); }} className="font-bold text-rose-300">Log in</button>}
         </div>
       </header>
 
-      <main className="min-h-0 flex-1 overflow-y-auto bg-slate-950">
+      <main className="min-h-0 flex-1 overflow-y-auto">
         {page === 'feed' && <FeedPage me={me} go={go} />}
         {page === 'rooms' && (
           <div className="h-full">
@@ -94,6 +94,7 @@ export default function App() {
               guestName={guestName}
               setGuestName={setGuestName}
               onPresence={(online) => setOnlineCount(online.length)}
+              goDm={goDm}
             />
           </div>
         )}
@@ -115,10 +116,13 @@ export default function App() {
           primary), plus the GhostTech section. */}
       {drawerOpen && (
         <div className="fixed inset-0 z-50">
-          <div className="absolute inset-0 bg-black/60" onClick={() => setDrawerOpen(false)} />
-          <aside className="absolute left-0 top-0 flex h-full w-64 flex-col border-r border-white/10 bg-slate-950 p-4">
-            <div className="mb-4 flex items-center justify-between">
-              <span className="text-sm font-black tracking-wide">🤫 HuSH</span>
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-[2px]" onClick={() => setDrawerOpen(false)} />
+          <aside className="absolute left-0 top-0 flex h-full w-72 flex-col border-r border-rose-200/10 bg-gradient-to-b from-[#0b0e18] to-[#05070d] p-4 shadow-[24px_0_60px_rgba(0,0,0,0.6)]">
+            <div className="mb-5 flex items-center justify-between">
+              <span className="flex items-center gap-2.5">
+                <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-rose-500 to-pink-600 text-lg shadow-lg shadow-rose-950/50 ring-1 ring-white/25">🤫</span>
+                <span className="text-sm font-black tracking-[0.18em]">HuSH</span>
+              </span>
               <button onClick={() => setDrawerOpen(false)} className="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-300">✕</button>
             </div>
             <nav className="space-y-1">
@@ -126,18 +130,30 @@ export default function App() {
                 <button
                   key={tab.id}
                   onClick={() => { if (tab.id === 'profile') setProfileTarget(null); setPage(tab.id); setDrawerOpen(false); }}
-                  className={`flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm font-bold ${
-                    page === tab.id ? 'bg-gradient-to-r from-rose-500/20 to-purple-500/20 text-rose-200' : 'text-slate-300 hover:bg-white/5'
+                  className={`relative flex min-h-[46px] w-full items-center gap-3 rounded-xl px-2.5 py-2 text-sm font-bold ${
+                    page === tab.id
+                      ? 'border border-rose-300/30 bg-gradient-to-r from-rose-500/[0.16] to-pink-500/[0.07] text-white shadow-[inset_0_0_22px_rgba(244,63,94,0.07),0_0_10px_rgba(244,63,94,0.25)]'
+                      : 'border border-transparent text-slate-300 hover:bg-rose-400/[0.06]'
                   }`}
                 >
-                  <span>{tab.icon}</span> {tab.label}
+                  {page === tab.id && (
+                    <span className="absolute -left-4 bottom-2.5 top-2.5 w-[3px] rounded bg-gradient-to-b from-rose-400 to-pink-600 shadow-[0_0_10px_rgba(244,63,94,0.6)]" />
+                  )}
+                  <span className={`flex h-9 w-9 flex-none items-center justify-center rounded-[11px] text-base ${
+                    page === tab.id
+                      ? 'border border-rose-300/30 bg-gradient-to-br from-rose-500/25 to-pink-500/25'
+                      : 'border border-white/[0.07] bg-rose-400/[0.06]'
+                  }`}>
+                    {tab.icon}
+                  </span>
+                  {tab.label}
                 </button>
               ))}
             </nav>
-            <div className="mt-6 border-t border-white/10 pt-4">
-              <p className="mb-2 px-1 text-[10px] font-black uppercase tracking-widest text-slate-500">GhostTech</p>
-              <button onClick={launchGhostSuite} className="flex w-full items-center gap-2.5 rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-left">
-                <span className="text-lg">👻</span>
+            <div className="mt-7 border-t border-white/[0.07] pt-4">
+              <p className="eyebrow mb-3 px-1">GhostTech</p>
+              <button onClick={launchGhostSuite} className="flex min-h-[46px] w-full items-center gap-3 rounded-xl border border-white/[0.08] bg-white/[0.04] px-2.5 py-2 text-left hover:bg-rose-400/[0.06]">
+                <span className="flex h-9 w-9 flex-none items-center justify-center rounded-[11px] border border-white/[0.07] bg-rose-400/[0.06] text-lg">👻</span>
                 <span>
                   <span className="block text-sm font-bold text-slate-100">GhostSuite</span>
                   <span className="block text-[10px] text-slate-400">Open the GhostSuite app</span>
@@ -152,20 +168,27 @@ export default function App() {
         </div>
       )}
 
-      <nav className="flex h-16 shrink-0 items-stretch justify-around border-t border-white/10 bg-slate-950/95 pb-[env(safe-area-inset-bottom)]">
+      <nav className="flex h-[68px] shrink-0 items-stretch justify-around gap-0.5 border-t border-rose-200/10 bg-[#070a12]/95 px-1.5 pb-[env(safe-area-inset-bottom)] shadow-[0_-12px_34px_rgba(0,0,0,0.55)] backdrop-blur-xl">
         {TABS.map((tab) => (
           <button
             key={tab.id}
             onClick={() => { if (tab.id === 'profile') setProfileTarget(null); setPage(tab.id); }}
-            className={`flex flex-1 flex-col items-center justify-center gap-0.5 ${
-              page === tab.id ? 'text-rose-300' : 'text-slate-500'
+            className={`flex flex-1 flex-col items-center justify-center gap-1 rounded-2xl ${
+              page === tab.id
+                ? 'bg-gradient-to-b from-rose-500/[0.14] to-pink-500/[0.05] text-rose-200 shadow-[0_0_14px_rgba(244,63,94,0.22)]'
+                : 'text-slate-500'
             }`}
           >
-            <span className="text-xl leading-none">{tab.icon}</span>
-            <span className={`text-[10px] font-bold uppercase tracking-wide ${page === tab.id ? '' : ''}`}>
+            <span className={`flex h-[30px] w-[30px] items-center justify-center rounded-[10px] text-base leading-none ${
+              page === tab.id
+                ? 'border border-rose-300/30 bg-gradient-to-br from-rose-500/30 to-pink-500/30'
+                : 'border border-white/[0.05] bg-white/[0.03]'
+            }`}>
+              {tab.icon}
+            </span>
+            <span className="text-[10px] font-bold uppercase tracking-wide">
               {tab.label}
             </span>
-            {page === tab.id && <span className="h-0.5 w-8 rounded bg-gradient-to-r from-rose-500 to-purple-500" />}
           </button>
         ))}
       </nav>

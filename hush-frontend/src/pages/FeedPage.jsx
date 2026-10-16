@@ -41,30 +41,30 @@ export default function FeedPage({ me, go }) {
     <div className="mx-auto w-full max-w-xl space-y-4 p-4">
       <div className="flex items-center justify-between">
         <h2 className="text-base font-black tracking-wide">Feed</h2>
-        <button onClick={load} className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-bold text-slate-300">
+        <button onClick={load} className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-bold text-slate-300 shadow-md shadow-black/30 hover:bg-white/10">
           ↻ Refresh
         </button>
       </div>
 
       {me ? (
-        <form onSubmit={submitPost} className="rounded-2xl border border-white/5 bg-white/5 p-4">
+        <form onSubmit={submitPost} className="grad-card rounded-[22px] p-4">
           <textarea
             value={composer}
             onChange={(e) => setComposer(e.target.value)}
             rows={3}
             maxLength={500}
             placeholder={`What's the word, ${me.displayName}?`}
-            className="w-full resize-none rounded-xl border border-white/10 bg-slate-900 p-3 text-sm text-slate-100 outline-none focus:border-purple-500/40"
+            className="w-full resize-none rounded-xl border border-white/10 bg-black/30 p-3 text-sm text-slate-100 outline-none"
           />
           <div className="mt-2 flex items-center justify-between">
             <span className="text-[10px] text-slate-500">{composer.length}/500</span>
-            <button type="submit" disabled={posting || !composer.trim()} className="rounded-xl bg-gradient-to-r from-rose-500 to-purple-600 px-5 py-2 text-xs font-bold uppercase text-white disabled:opacity-50">
+            <button type="submit" disabled={posting || !composer.trim()} className="rounded-xl bg-gradient-to-r from-rose-500 to-pink-600 px-5 py-2 text-xs font-bold uppercase text-white shadow-lg shadow-rose-950/50 disabled:opacity-50">
               Post
             </button>
           </div>
         </form>
       ) : (
-        <button onClick={() => go('profile')} className="w-full rounded-2xl border border-purple-500/30 bg-purple-500/10 p-4 text-sm font-bold text-purple-300">
+        <button onClick={() => go('profile')} className="w-full rounded-2xl border border-rose-400/30 bg-rose-500/10 p-4 text-sm font-bold text-rose-200 shadow-lg shadow-black/30">
           Log in or create an account to post, like and comment →
         </button>
       )}

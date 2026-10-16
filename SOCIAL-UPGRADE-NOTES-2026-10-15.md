@@ -265,3 +265,19 @@ anybody's permanent archive.
    entry for real.
 
 Built by Daniel "GhostDev" Sielaff & Jinx (Muse) — GhostTech.
+
+## SAFETY BUILD — queued by Daniel 2026-10-15 23:35 CDT (runs right after v1.1.2 beauty pass)
+Daniel's requirement, verbatim gist: users must be able to ACCEPT or DENY chat and video from other users, plus a BLOCK feature — "people are weird out in the real world."
+Design (must be enforced SERVER-side over REST + WS, not just hidden in UI):
+1. DM requests: first-contact DMs land in a Requests inbox; Accept opens the conversation, Deny closes it (sender gets a neutral not-accepted state). Accepted pairs message freely after.
+2. Video accept/deny in DMs: starting video sends a call invite over the existing RTC signaling; media connects only on Accept; Deny ends the call attempt. Public-room video stays presence-based, BUT blocked pairs never connect media either way.
+3. Block: per-user block list, server-persisted. Blocked user cannot DM you (server refuses), cannot follow you (existing follow removed), their posts/comments are hidden from your feed, they vanish from your People and you from theirs. Unblock from a Blocked list in profile/settings.
+
+## PRIVACY BUILD EXPANSION — Daniel 2026-10-15 23:38 CDT (same build as safety, above)
+More of Daniel's spec, verbatim gist: mic mute and blackout; "still have top 5 and a friends list but I want it to be called something else HuSH style"; the app "is always still based by security and privacy with users preferences to who what when where why"; hiding activity presences.
+Items:
+4. Mic mute: real local mic mute in any voice/video session (track-level, instant).
+5. Blackout: one-tap camera blackout — your video goes dark/off while you stay in the session; others see a blacked-out tile, not a frozen frame or a silent drop.
+6. Friends list + Top 5, renamed HuSH-style (working names, Daniel can rename with one word): friends = "Confidants" (mutual follows = confidants); Top 5 featured on profile = "The Inner Five" (pick up to 5 confidants to feature). If Top 5 / friends don't exist in the current build, ADD them here: friends list page + profile Top-5 showcase, picker limited to own confidants.
+7. Preference-driven privacy (who / what / when / where / why): settings for who can DM me (everyone / confidants only / nobody), who can video-call me (same choices), who can see my profile + posts (everyone / confidants / only me where sensible), defaults = the safer option.
+8. Presence hiding: invisible mode — hide online status, hide last-active, hide which room you're in; you can browse and read while appearing offline. Presence the server broadcasts must respect it (no leaking via WS presence or People list).
