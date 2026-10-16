@@ -141,11 +141,14 @@ function ProfileMusic({ profile }) {
 }
 
 // ---------- Auth forms (shown when logged out, no target) ----------
-function AuthForms({ onAuth }) {
+function AuthForms({ onAuth, openLegal }) {
   const [mode, setMode] = useState('login');
   const [handle, setHandle] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  const [agreed, setAgreed] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -154,7 +157,9 @@ function AuthForms({ onAuth }) {
     setError('');
     setBusy(true);
     try {
-      const body = mode === 'register' ? { handle, password, displayName: displayName || handle } : { handle, password };
+      const body = mode === 'register'
+        ? { handle, password, displayName: displayName || handle, email, phone, legalAccepted: agreed }
+        : { handle, password };
       const data = await api(`/auth/${mode}`, { method: 'POST', body });
       setToken(data.token);
       onAuth(data.user);
@@ -169,7 +174,7 @@ function AuthForms({ onAuth }) {
       <div className="grad-card rounded-[22px] p-5">
         <h2 className="mb-1 text-lg font-black">🤫 HuSH</h2>
         <p className="mb-4 text-xs text-slate-400">
-          {mode === 'register' ? 'Pick a handle and password. That is the whole form.' : 'Welcome back.'}
+          {mode === 'register' ? 'One account per person — that is why registration asks for an email and a phone number. Each can only be used once.' : 'Welcome back.'}
         </p>
         <div className="mb-4 flex rounded-xl border border-white/10 bg-slate-900 p-1">
           {['login', 'register'].map((m) => (
@@ -183,9 +188,42 @@ function AuthForms({ onAuth }) {
           {mode === 'register' && (
             <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Display name (optional)" className="w-full rounded-xl border border-white/10 bg-slate-900 px-3 py-2.5 text-sm text-slate-100 outline-none" />
           )}
+          {mode === 'register' && (
+            <>
+              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email (one account per email)" autoComplete="email" className="w-full rounded-xl border border-white/10 bg-slate-900 px-3 py-2.5 text-sm text-slate-100 outline-none" />
+              <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Phone number (one account per number)" autoComplete="tel" className="w-full rounded-xl border border-white/10 bg-slate-900 px-3 py-2.5 text-sm text-slate-100 outline-none" />
+              <p className="text-[10px] leading-relaxed text-slate-500">
+                Email and phone stay private — never shown on your profile. They exist so nobody can run double accounts.
+              </p>
+            </>
+          )}
           <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password (4+ characters)" autoComplete={mode === 'register' ? 'new-password' : 'current-password'} className="w-full rounded-xl border border-white/10 bg-slate-900 px-3 py-2.5 text-sm text-slate-100 outline-none" />
+          {mode === 'register' && (
+            <div className="rounded-xl border border-white/10 bg-slate-900/60 p-3">
+              <div className="mb-2 flex flex-wrap gap-1.5">
+                {[
+                  { id: 'rules', label: 'Site Rules' },
+                  { id: 'privacy', label: 'Privacy Policy' },
+                  { id: 'terms', label: 'Terms of Use' }
+                ].map((d) => (
+                  <button
+                    type="button"
+                    key={d.id}
+                    onClick={() => openLegal && openLegal(d.id)}
+                    className="rounded-lg border border-rose-400/30 bg-rose-500/10 px-2.5 py-1 text-[11px] font-bold text-rose-200"
+                  >
+                    📜 {d.label}
+                  </button>
+                ))}
+              </div>
+              <label className="flex cursor-pointer items-start gap-2 text-[11px] leading-relaxed text-slate-300">
+                <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} className="mt-0.5 h-4 w-4 shrink-0 accent-rose-500" />
+                <span>I agree to the <strong>Site Rules</strong>, <strong>Privacy Policy</strong> and <strong>Terms of Use</strong> (v1.0) — including one account per person, and permanent bans for double accounts and scams.</span>
+              </label>
+            </div>
+          )}
           {error && <p className="text-xs text-rose-400">{error}</p>}
-          <button type="submit" disabled={busy} className="w-full rounded-xl bg-gradient-to-r from-rose-500 to-pink-600 py-2.5 text-sm font-bold uppercase text-white shadow-lg shadow-rose-950/50 disabled:opacity-50">
+          <button type="submit" disabled={busy || (mode === 'register' && !agreed)} className="w-full rounded-xl bg-gradient-to-r from-rose-500 to-pink-600 py-2.5 text-sm font-bold uppercase text-white shadow-lg shadow-rose-950/50 disabled:opacity-50">
             {mode === 'register' ? 'Create account' : 'Log in'}
           </button>
         </form>
@@ -198,7 +236,7 @@ function AuthForms({ onAuth }) {
 }
 
 // ---------- Main profile page (any user) ----------
-export default function ProfilePage({ me, onAuth, targetHandle, go, goDm }) {
+export default function ProfilePage({ me, onAuth, targetHandle, go, goDm, goProfile, openLegal }) {
   const handle = targetHandle || (me && me.handle) || null;
   const [profile, setProfile] = useState(null);
   const [userPosts, setUserPosts] = useState([]);
@@ -217,21 +255,35 @@ export default function ProfilePage({ me, onAuth, targetHandle, go, goDm }) {
   // edit drafts
   const [draft, setDraft] = useState(null);
 
+  // v1.2.0 own-profile state
+  const [blockedNow, setBlockedNow] = useState(false);
+  const [emailDraft, setEmailDraft] = useState('');
+  const [phoneDraft, setPhoneDraft] = useState('');
+
   const isOwn = !!(me && profile && me.handle === profile.handle);
 
   const loadAll = async (h) => {
     try {
-      const [p, po, ph, tr] = await Promise.all([
-        api(`/users/${h}`),
+      const p = await api(`/users/${h}`);
+      const u = { links: [], innerFive: [], innerFiveUsers: [], ...p.user };
+      setProfile(u);
+      setLoadError('');
+      if (u.profilePrivate) {
+        // Confidants-only profile viewed by an outsider: the server
+        // refuses the content endpoints; don't treat that as an error.
+        setUserPosts([]);
+        setUserPhotos([]);
+        setUserTracks([]);
+        return;
+      }
+      const [po, ph, tr] = await Promise.all([
         api(`/users/${h}/posts`),
         api(`/users/${h}/photos`),
         api(`/users/${h}/tracks`)
       ]);
-      setProfile(p.user);
       setUserPosts(po.posts);
       setUserPhotos(ph.photos);
       setUserTracks(tr.tracks);
-      setLoadError('');
     } catch (err) {
       setLoadError(err.message);
     }
@@ -245,6 +297,8 @@ export default function ProfilePage({ me, onAuth, targetHandle, go, goDm }) {
   // Initialize edit drafts when my own profile loads
   useEffect(() => {
     if (profile && me && profile.handle === me.handle) {
+      setEmailDraft(profile.email || '');
+      setPhoneDraft(profile.phone || '');
       setDraft({
         displayName: profile.displayName || '',
         bio: profile.bio || '',
@@ -264,7 +318,7 @@ export default function ProfilePage({ me, onAuth, targetHandle, go, goDm }) {
     }
   }, [profile, me]);
 
-  if (!handle) return <AuthForms onAuth={onAuth} />;
+  if (!handle) return <AuthForms onAuth={onAuth} openLegal={openLegal} />;
   if (!profile) {
     return <div className="p-6 text-center text-sm text-slate-500">{loadError || 'Loading profile…'}</div>;
   }
@@ -282,6 +336,77 @@ export default function ProfilePage({ me, onAuth, targetHandle, go, goDm }) {
     try {
       const data = await api(`/users/${profile.handle}/follow`, { method: 'POST', body: {} });
       setProfile((prev) => ({ ...prev, following: data.following, followerCount: data.user.followerCount }));
+    } catch (err) { setActionError(err.message); }
+  };
+
+  // ---------- v1.2.0 safety handlers ----------
+  const refreshSelf = (user) => {
+    onAuth(user);
+    setProfile((prev) => ({ ...prev, ...user }));
+  };
+
+  const blockProfile = async () => {
+    try {
+      await api(`/users/${profile.handle}/block`, { method: 'POST', body: {} });
+      setBlockedNow(true);
+    } catch (err) { setActionError(err.message); }
+  };
+
+  const unblockProfile = async () => {
+    try {
+      await api(`/users/${profile.handle}/unblock`, { method: 'POST', body: {} });
+      setBlockedNow(false);
+      loadAll(profile.handle);
+    } catch (err) { setActionError(err.message); }
+  };
+
+  const unblockFromList = async (h) => {
+    try {
+      await api(`/users/${h}/unblock`, { method: 'POST', body: {} });
+      const data = await api('/me');
+      refreshSelf(data.user);
+      flash(`Unblocked @${h}`);
+    } catch (err) { setActionError(err.message); }
+  };
+
+  const savePrivacy = async (patch) => {
+    try {
+      const data = await api('/me', { method: 'PUT', body: { privacy: { ...(profile.privacy || {}), ...patch } } });
+      refreshSelf(data.user);
+      flash('Privacy setting saved ✓');
+    } catch (err) { setActionError(err.message); }
+  };
+
+  const toggleInnerFive = async (h) => {
+    const current = profile.innerFive || [];
+    const next = current.includes(h) ? current.filter((x) => x !== h) : [...current, h];
+    if (next.length > 5) { setActionError('The Inner Five holds at most 5 people.'); return; }
+    try {
+      const data = await api('/me', { method: 'PUT', body: { innerFive: next } });
+      refreshSelf(data.user);
+      loadAll(profile.handle); // innerFiveUsers showcase refresh
+      flash('Inner Five updated ✓');
+    } catch (err) { setActionError(err.message); }
+  };
+
+  const saveAccount = async (e) => {
+    e.preventDefault();
+    try {
+      const body = {};
+      if (emailDraft !== (profile.email || '')) body.email = emailDraft;
+      if (phoneDraft !== (profile.phone || '')) body.phone = phoneDraft;
+      if (!Object.keys(body).length) { flash('Nothing changed'); return; }
+      const data = await api('/me', { method: 'PUT', body });
+      refreshSelf(data.user);
+      flash('Account details saved ✓');
+    } catch (err) { setActionError(err.message); }
+  };
+
+  const acceptLegalHere = async () => {
+    try {
+      const data = await api('/me', { method: 'PUT', body: { acceptLegal: true } });
+      refreshSelf(data.user);
+      flash('Agreement recorded ✓');
     } catch (err) { setActionError(err.message); }
   };
 
@@ -413,6 +538,64 @@ export default function ProfilePage({ me, onAuth, targetHandle, go, goDm }) {
 
   const logout = () => { setToken(null); onAuth(null); };
 
+  if (blockedNow || profile.blockedByMe) {
+    return (
+      <div className="mx-auto w-full max-w-xl p-6">
+        <div className="grad-card rounded-[22px] p-6 text-center">
+          <p className="mb-1 text-3xl">🚫</p>
+          <h2 className="mb-2 text-base font-black">@{profile.handle} is blocked</h2>
+          <p className="mb-4 text-sm text-slate-400">
+            They can't message, follow or call you, their content is hidden from you, and yours from them.
+          </p>
+          {actionError && <p className="mb-3 text-xs text-rose-400">{actionError}</p>}
+          <button onClick={unblockProfile} className="rounded-xl bg-gradient-to-r from-rose-500 to-pink-600 px-5 py-2.5 text-sm font-bold text-white shadow-lg shadow-rose-950/50">
+            Unblock @{profile.handle}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (profile.profilePrivate && !isOwn) {
+    return (
+      <div className="relative mx-auto w-full max-w-xl overflow-hidden" style={{ backgroundColor: theme.bg, color: theme.text }}>
+        <PatternLayer theme={theme} />
+        <div className="relative space-y-4 p-4">
+          <Frame theme={theme}>
+            <div className="flex items-start gap-4 p-3" style={{ background: theme.cardGradient || theme.cardBg }}>
+              <AvatarView user={profile} size={72} />
+              <div className="min-w-0 flex-1">
+                <h2 className="truncate text-xl font-black">{profile.displayName}</h2>
+                <p className="text-sm text-slate-400">@{profile.handle}</p>
+                <p className="mt-2 rounded-xl border border-white/10 bg-black/25 px-3 py-2 text-xs font-bold text-slate-200">
+                  🤫 This profile is Confidants-only. Their posts and page open up when you're Confidants (mutual follows).
+                </p>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  <span className="rounded-full bg-black/25 px-2.5 py-0.5 text-[11px] font-bold text-slate-300 ring-1 ring-white/10"><span className="text-white">{profile.followerCount}</span> followers</span>
+                  <span className="rounded-full bg-black/25 px-2.5 py-0.5 text-[11px] font-bold text-slate-300 ring-1 ring-white/10"><span className="text-white">{profile.confidantCount || 0}</span> confidants</span>
+                </div>
+              </div>
+              <div className="flex shrink-0 flex-col gap-1.5">
+                <button onClick={toggleFollow} className="rounded-lg px-3 py-1.5 text-xs font-bold text-white shadow-lg shadow-black/40" style={{ backgroundColor: theme.accent }}>
+                  {profile.following ? 'Following ✓' : 'Follow'}
+                </button>
+                <button onClick={() => (me ? goDm(profile.handle) : go('profile'))} className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-bold text-slate-200">
+                  Message
+                </button>
+                {me && (
+                  <button onClick={blockProfile} className="rounded-lg border border-rose-500/40 bg-rose-950/40 px-3 py-1.5 text-xs font-bold text-rose-200">
+                    🚫 Block
+                  </button>
+                )}
+              </div>
+            </div>
+          </Frame>
+          {actionError && <p className="text-xs text-rose-400">{actionError}</p>}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="relative mx-auto w-full max-w-xl overflow-hidden" style={{ backgroundColor: theme.bg, color: theme.text }}>
       <PatternLayer theme={theme} />
@@ -464,10 +647,41 @@ export default function ProfilePage({ me, onAuth, targetHandle, go, goDm }) {
             <button onClick={() => (me ? goDm(profile.handle) : go('profile'))} className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-bold text-slate-200">
               Message
             </button>
+            {me && (
+              <button onClick={blockProfile} className="rounded-lg border border-rose-500/40 bg-rose-950/40 px-3 py-1.5 text-xs font-bold text-rose-200">
+                🚫 Block
+              </button>
+            )}
           </div>
         )}
       </div>
       </Frame>
+
+      {profile.confidant && !isOwn && (
+        <p className="text-xs font-bold text-emerald-300">💚 You and @{profile.handle} are Confidants — you follow each other.</p>
+      )}
+
+      {/* The Inner Five — up to 5 featured Confidants */}
+      {profile.innerFiveUsers && profile.innerFiveUsers.length > 0 && (
+        <div>
+          <p className="eyebrow mb-2">⭐ The Inner Five</p>
+          <div className="flex flex-wrap gap-2">
+            {profile.innerFiveUsers.map((u) => (
+              <button
+                key={u.handle}
+                onClick={() => goProfile && u.handle !== profile.handle && goProfile(u.handle)}
+                className="row-card flex items-center gap-2 rounded-2xl py-1.5 pl-1.5 pr-3"
+              >
+                <AvatarView user={u} size={30} />
+                <span className="text-left">
+                  <span className="block max-w-[110px] truncate text-xs font-bold text-white">{u.displayName}</span>
+                  <span className="block text-[10px] text-slate-400">@{u.handle}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {actionError && <p className="text-xs text-rose-400">{actionError}</p>}
       {notice && <p className="text-xs text-emerald-400">{notice}</p>}
@@ -686,6 +900,158 @@ export default function ProfilePage({ me, onAuth, targetHandle, go, goDm }) {
             Save profile
           </button>
         </form>
+      )}
+
+      {/* Confidants + The Inner Five (own profile) */}
+      {isOwn && (
+        <div className="glass-card space-y-3 rounded-[22px] p-5">
+          <h3 className="eyebrow">💚 Confidants & The Inner Five</h3>
+          <p className="text-[11px] leading-relaxed text-slate-400">
+            Confidants are your mutual follows. Feature up to five of them as your <strong className="text-slate-200">Inner Five</strong> — they get the ⭐ row on your profile.
+          </p>
+          {(profile.confidants || []).length === 0 && (
+            <p className="text-xs text-slate-500">No Confidants yet — follow someone who follows you back.</p>
+          )}
+          <div className="space-y-1.5">
+            {(profile.confidants || []).map((h) => {
+              const picked = (profile.innerFive || []).includes(h);
+              return (
+                <label key={h} className="flex cursor-pointer items-center gap-2.5 rounded-xl border border-white/[0.07] bg-white/[0.03] px-3 py-2">
+                  <input
+                    type="checkbox"
+                    checked={picked}
+                    onChange={() => toggleInnerFive(h)}
+                    className="h-4 w-4 accent-rose-500"
+                  />
+                  <span className="text-sm font-bold text-slate-100">@{h}</span>
+                  {picked && <span className="ml-auto text-[10px] font-black uppercase text-amber-300">⭐ Inner Five</span>}
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Privacy & Safety (own profile) */}
+      {isOwn && profile.privacy && (
+        <div className="glass-card space-y-4 rounded-[22px] p-5">
+          <h3 className="eyebrow">🛡 Privacy & Safety</h3>
+          <p className="text-[11px] leading-relaxed text-slate-400">
+            Every one of these is enforced by the server — not just hidden in the app. Changes save the moment you make them.
+          </p>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div>
+              <label className="mb-1 block text-[11px] font-bold text-slate-500">WHO CAN DM ME</label>
+              <select value={profile.privacy.dmFrom} onChange={(e) => savePrivacy({ dmFrom: e.target.value })} className="w-full rounded-xl border border-white/10 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none">
+                <option value="everyone">Everyone (as a request)</option>
+                <option value="confidants">Confidants only</option>
+                <option value="nobody">Nobody new</option>
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-[11px] font-bold text-slate-500">WHO CAN VIDEO-CALL ME</label>
+              <select value={profile.privacy.videoFrom} onChange={(e) => savePrivacy({ videoFrom: e.target.value })} className="w-full rounded-xl border border-white/10 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none">
+                <option value="everyone">Everyone</option>
+                <option value="confidants">Confidants only</option>
+                <option value="nobody">Nobody</option>
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-[11px] font-bold text-slate-500">WHO SEES MY PROFILE + POSTS</label>
+              <select value={profile.privacy.profileVisibility} onChange={(e) => savePrivacy({ profileVisibility: e.target.value })} className="w-full rounded-xl border border-white/10 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none">
+                <option value="everyone">Everyone</option>
+                <option value="confidants">Confidants only</option>
+              </select>
+            </div>
+          </div>
+          <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-white/[0.07] bg-white/[0.03] px-3 py-2.5">
+            <input type="checkbox" checked={!!profile.privacy.videoEnabled} onChange={(e) => savePrivacy({ videoEnabled: e.target.checked })} className="h-4 w-4 accent-rose-500" />
+            <span>
+              <span className="block text-sm font-bold text-slate-100">📹 Video on this account</span>
+              <span className="block text-[11px] text-slate-400">Off = text-only. Nobody can call you, you can't go live, and video buttons show as off. Listening in cyphers still works.</span>
+            </span>
+          </label>
+          <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-white/[0.07] bg-white/[0.03] px-3 py-2.5">
+            <input type="checkbox" checked={!!profile.privacy.invisible} onChange={(e) => savePrivacy({ invisible: e.target.checked })} className="h-4 w-4 accent-rose-500" />
+            <span>
+              <span className="block text-sm font-bold text-slate-100">🤫 Appear offline (invisible)</span>
+              <span className="block text-[11px] text-slate-400">The server never reports you as online — presence lists and People dots won't show you. You can still use everything.</span>
+            </span>
+          </label>
+
+          <div>
+            <p className="mb-1.5 text-[11px] font-bold text-slate-500">BLOCKED ({(profile.blockedUsers || []).length})</p>
+            {(profile.blockedUsers || []).length === 0 && <p className="text-xs text-slate-500">Nobody blocked. Block from a profile or a DM when someone earns it.</p>}
+            <div className="space-y-1.5">
+              {(profile.blockedUsers || []).map((u) => (
+                <div key={u.handle} className="flex items-center gap-2.5 rounded-xl border border-white/[0.07] bg-white/[0.03] px-3 py-2">
+                  <AvatarView user={u} size={26} />
+                  <span className="min-w-0 flex-1 truncate text-sm font-bold text-slate-100">@{u.handle}</span>
+                  <button onClick={() => unblockFromList(u.handle)} className="shrink-0 rounded-lg border border-white/15 bg-white/5 px-2.5 py-1.5 text-[11px] font-bold text-slate-200">
+                    Unblock
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Account — private identifiers + legal (own profile) */}
+      {isOwn && (
+        <div className="glass-card space-y-4 rounded-[22px] p-5">
+          <h3 className="eyebrow">🔐 Account</h3>
+          <form onSubmit={saveAccount} className="space-y-3">
+            <div>
+              <label className="mb-1 block text-[11px] font-bold text-slate-500">EMAIL (PRIVATE — ONLY YOU SEE THIS)</label>
+              <input type="email" value={emailDraft} onChange={(e) => setEmailDraft(e.target.value)} placeholder="you@example.com" className="w-full rounded-xl border border-white/10 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none" />
+            </div>
+            <div>
+              <label className="mb-1 block text-[11px] font-bold text-slate-500">PHONE (PRIVATE — ONLY YOU SEE THIS)</label>
+              <input type="tel" value={phoneDraft} onChange={(e) => setPhoneDraft(e.target.value)} placeholder="3205551234" className="w-full rounded-xl border border-white/10 bg-slate-900 px-3 py-2 text-sm text-slate-100 outline-none" />
+            </div>
+            <p className="text-[10px] leading-relaxed text-slate-500">
+              One account per email and per phone number — that's the anti-scammer rule. Accounts from before this rule can bind theirs here.
+            </p>
+            <button type="submit" className="rounded-xl border border-white/15 bg-white/5 px-4 py-2 text-xs font-bold uppercase text-slate-100">
+              Save account details
+            </button>
+          </form>
+          <div className="border-t border-white/[0.07] pt-3">
+            <p className="mb-2 text-[11px] font-bold text-slate-500">RULES & LEGAL</p>
+            <p className="mb-2 text-xs text-slate-400">
+              {profile.legal
+                ? `You agreed to the Site Rules, Privacy Policy and Terms of Use v${profile.legal.version} on ${new Date(profile.legal.acceptedAt).toLocaleDateString()}.`
+                : 'You have not recorded agreement to the current Rules / Privacy / Terms yet.'}
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {[
+                { id: 'rules', label: 'Site Rules' },
+                { id: 'privacy', label: 'Privacy Policy' },
+                { id: 'terms', label: 'Terms of Use' }
+              ].map((d) => (
+                <button key={d.id} onClick={() => openLegal && openLegal(d.id)} className="rounded-lg border border-rose-400/30 bg-rose-500/10 px-2.5 py-1.5 text-[11px] font-bold text-rose-200">
+                  📜 {d.label}
+                </button>
+              ))}
+              {!profile.legal && (
+                <button onClick={acceptLegalHere} className="rounded-lg bg-gradient-to-r from-rose-500 to-pink-600 px-3 py-1.5 text-[11px] font-bold text-white">
+                  I agree
+                </button>
+              )}
+            </div>
+          </div>
+          {profile.warnings && profile.warnings.length > 0 && (
+            <div className="rounded-xl border border-amber-400/40 bg-amber-950/60 p-3">
+              <p className="text-xs font-bold text-amber-200">
+                ⚠️ This account has {profile.warnings.length} formal warning{profile.warnings.length > 1 ? 's' : ''} on record.
+              </p>
+              <p className="mt-1 text-[11px] leading-relaxed text-amber-100/80">
+                Warnings come from the scam-pattern checks in the Site Rules. Cross the line again and the account is permanently banned.
+              </p>
+            </div>
+          )}
+        </div>
       )}
       </div>
     </div>

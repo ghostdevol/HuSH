@@ -21,7 +21,7 @@ import AvatarView from './AvatarView';
 
 const RTC_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
-function VideoTile({ stream, label, muted }) {
+function VideoTile({ stream, label, muted, peerMuted, blackedOut }) {
   const ref = useRef(null);
   useEffect(() => {
     if (ref.current && stream) {
@@ -32,16 +32,44 @@ function VideoTile({ stream, label, muted }) {
   }, [stream]);
   return (
     <div className="relative w-40 shrink-0 overflow-hidden rounded-xl bg-black shadow-lg shadow-black/50 ring-1 ring-white/15">
-      <video ref={ref} autoPlay playsInline muted={!!muted} className="h-28 w-full object-cover" />
+      <video ref={ref} autoPlay playsInline muted={!!muted} className={`h-28 w-full object-cover ${blackedOut ? 'invisible' : ''}`} />
+      {blackedOut && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-black">
+          <span className="text-lg">⬛</span>
+          <span className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Camera blacked out</span>
+        </div>
+      )}
       <span className="absolute bottom-1 left-1 rounded-md bg-black/65 px-1.5 py-0.5 text-[9px] font-bold text-white backdrop-blur-sm">
-        {label}
+        {label}{peerMuted ? ' 🔇' : ''}
       </span>
     </div>
   );
 }
 
-export default function ChatRoom({ room, displayName, me, onPresence, onOpenDm }) {
+// Audio-only tile: used when MY account has video off — in a cypher I
+// still hear the performance, I just never render video.
+function AudioTile({ stream, label }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (ref.current && stream) {
+      ref.current.srcObject = stream;
+      const p = ref.current.play();
+      if (p) p.catch(() => { /* autoplay waits for a user gesture */ });
+    }
+  }, [stream]);
+  return (
+    <div className="relative flex h-28 w-40 shrink-0 flex-col items-center justify-center gap-1 overflow-hidden rounded-xl bg-slate-900 shadow-lg shadow-black/50 ring-1 ring-white/15">
+      <span className="text-xl">🔊</span>
+      <span className="px-2 text-center text-[9px] font-bold text-slate-300">{label}</span>
+      <span className="text-[8px] uppercase tracking-wide text-slate-500">audio only — your video is off</span>
+      <audio ref={ref} autoPlay className="hidden" />
+    </div>
+  );
+}
+
+export default function ChatRoom({ room, displayName, me, onPresence, onOpenDm, isDm = false, dmPeer = null, dmStatus = 'open', dmLocked = false, onDmEvent, onOpenSettings }) {
   const myHandle = me ? me.handle : null;
+  const myVideoOff = !!(me && me.privacy && me.privacy.videoEnabled === false);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [peers, setPeers] = useState([]);
@@ -52,6 +80,16 @@ export default function ChatRoom({ room, displayName, me, onPresence, onOpenDm }
   const [userMap, setUserMap] = useState({});
   const [cypher, setCypher] = useState(null); // latest cypher-state, null when no cypher
   const [secondsLeft, setSecondsLeft] = useState(null);
+  // v1.2.0: call flow + mic/blackout + notices
+  const [chatNotice, setChatNotice] = useState('');
+  const [callState, setCallState] = useState('idle'); // idle | calling | incoming | live
+  const [incomingFrom, setIncomingFrom] = useState(null); // { peerId, fromHandle }
+  const [peerStates, setPeerStates] = useState({}); // peerId -> { muted, blackedOut }
+  const [micMuted, setMicMuted] = useState(false);
+  const [blackedOut, setBlackedOut] = useState(false);
+  const callTimerRef = useRef(null);
+  const callStateRef = useRef('idle');
+  const setCall = (s) => { callStateRef.current = s; setCallState(s); };
 
   const wsRef = useRef(null);
   const myPeerIdRef = useRef(null);
@@ -215,9 +253,87 @@ export default function ChatRoom({ room, displayName, me, onPresence, onOpenDm }
     liveRef.current = false;
     setLocalStream(null);
     setLive(false);
+    setMicMuted(false);
+    setBlackedOut(false);
+    if (callStateRef.current === 'live') setCall('idle');
     for (const peerId of Array.from(pcsRef.current.keys())) closePc(peerId);
     setRemoteStreams({});
     send({ type: 'rtc-live', live: false }); // notify the room
+  };
+
+  // ---------- Mic mute / camera blackout (real, track-level) ----------
+
+  const toggleMute = () => {
+    const next = !micMuted;
+    setMicMuted(next);
+    // Mute the raw mic track AND the cypher mix track (the mix carries
+    // my voice; muting must actually silence what peers receive).
+    if (localStreamRef.current) {
+      localStreamRef.current.getAudioTracks().forEach((t) => { t.enabled = !next; });
+    }
+    if (mixRef.current && mixRef.current.mixedTrack) mixRef.current.mixedTrack.enabled = !next;
+    send({ type: 'rtc-mute', muted: next });
+  };
+
+  const toggleBlackout = () => {
+    const next = !blackedOut;
+    setBlackedOut(next);
+    // enabled=false on a video track sends black frames — the session
+    // stays up, and the rtc-blackout note tells peers to render the
+    // blacked-out state instead of a "frozen" tile.
+    if (localStreamRef.current) {
+      localStreamRef.current.getVideoTracks().forEach((t) => { t.enabled = !next; });
+    }
+    send({ type: 'rtc-blackout', blackedOut: next });
+  };
+
+  // ---------- DM video call flow ----------
+  // In a DM, "Go Live" is an invitation. Media starts only on accept.
+
+  const dmPeerSocketId = () => {
+    const other = peersRef.current[0];
+    return other ? other.id : null;
+  };
+
+  const clearCallTimer = () => {
+    if (callTimerRef.current) { clearTimeout(callTimerRef.current); callTimerRef.current = null; }
+  };
+
+  const startCall = () => {
+    setVideoError('');
+    setChatNotice('');
+    setCall('calling');
+    send({ type: 'call-invite', to: dmPeerSocketId() || '' });
+    clearCallTimer();
+    callTimerRef.current = setTimeout(() => {
+      if (callStateRef.current === 'calling') {
+        send({ type: 'call-cancel', to: dmPeerSocketId() || '' });
+        setCall('idle');
+        setChatNotice('No answer — the call ended.');
+      }
+    }, 30000);
+  };
+
+  const cancelCall = () => {
+    clearCallTimer();
+    send({ type: 'call-cancel', to: dmPeerSocketId() || '' });
+    setCall('idle');
+  };
+
+  const acceptCall = () => {
+    clearCallTimer();
+    if (incomingFrom) send({ type: 'call-accept', to: incomingFrom.peerId });
+    setIncomingFrom(null);
+    setCall('live');
+    startVideo();
+  };
+
+  const declineCall = () => {
+    clearCallTimer();
+    if (incomingFrom) send({ type: 'call-decline', to: incomingFrom.peerId });
+    setIncomingFrom(null);
+    setCall('idle');
+    setChatNotice('Call declined.');
   };
 
   // ---------- Cypher performer mix ----------
@@ -374,6 +490,13 @@ export default function ChatRoom({ room, displayName, me, onPresence, onOpenDm }
           nameByPeerRef.current = new Map((data.peers || []).map((p) => [p.id, p.name]));
           peersRef.current = others;
           setPeers(others);
+          setPeerStates((prev) => {
+            const next = { ...prev };
+            for (const p of data.peers || []) {
+              next[p.id] = { muted: !!p.muted, blackedOut: !!p.blackedOut };
+            }
+            return next;
+          });
           // Peers who left: tear down their connection and tile.
           for (const id of prevIds) {
             if (!others.some((p) => p.id === id)) closePc(id);
@@ -411,6 +534,58 @@ export default function ChatRoom({ room, displayName, me, onPresence, onOpenDm }
         case 'rtc-ice':
           handleIce(data.from, data.payload);
           break;
+        case 'rtc-mute':
+          setPeerStates((prev) => ({ ...prev, [data.from]: { ...(prev[data.from] || {}), muted: !!data.muted } }));
+          break;
+        case 'rtc-blackout':
+          setPeerStates((prev) => ({ ...prev, [data.from]: { ...(prev[data.from] || {}), blackedOut: !!data.blackedOut } }));
+          break;
+        case 'dm-request-sent':
+          setChatNotice('Request sent — your first message lands when they accept.');
+          if (onDmEvent) onDmEvent();
+          break;
+        case 'dm-request-pending':
+          setChatNotice('Request already sent — waiting for them to accept.');
+          break;
+        case 'dm-request':
+          setChatNotice(`@${data.from} wants to message you — accept or deny above.`);
+          if (onDmEvent) onDmEvent();
+          break;
+        case 'dm-accepted':
+          setChatNotice('Conversation open — say hi 🤫');
+          if (onDmEvent) onDmEvent();
+          break;
+        case 'call-incoming':
+          setIncomingFrom({ peerId: data.from, fromHandle: data.fromHandle });
+          setCall('incoming');
+          break;
+        case 'call-accepted':
+          clearCallTimer();
+          setCall('live');
+          startVideo();
+          break;
+        case 'call-declined':
+          clearCallTimer();
+          setCall('idle');
+          setChatNotice('Call declined.');
+          break;
+        case 'call-cancelled':
+          clearCallTimer();
+          if (callStateRef.current === 'incoming') setChatNotice('Missed call.');
+          setIncomingFrom(null);
+          setCall('idle');
+          break;
+        case 'call-unavailable':
+          clearCallTimer();
+          setCall('idle');
+          setChatNotice(data.message || 'Video is unavailable.');
+          break;
+        case 'moderation':
+          setChatNotice(data.message || '');
+          break;
+        case 'banned':
+          setChatNotice('⛔ This account is banned.');
+          break;
         case 'cypher-state':
           if (data.room === room) setCypher(data.active ? data : null);
           break;
@@ -421,7 +596,8 @@ export default function ChatRoom({ room, displayName, me, onPresence, onOpenDm }
           }
           break;
         case 'error':
-          console.error('Server error:', data.message);
+          if (data.code) setChatNotice(data.message);
+          else console.error('Server error:', data.message);
           break;
         default:
           break;
@@ -457,7 +633,12 @@ export default function ChatRoom({ room, displayName, me, onPresence, onOpenDm }
     setInput('');
   };
 
-  const hasVideo = live || Object.keys(remoteStreams).length > 0;
+  // Rendering rules when MY video is off account-wide: I never publish,
+  // and I don't render video tiles — except in a cypher, where I still
+  // hear the performance through audio-only tiles.
+  const audioOnlyMode = myVideoOff && !!cypher;
+  const renderedRemote = Object.entries(remoteStreams).filter(() => !myVideoOff || audioOnlyMode);
+  const hasVideo = live || renderedRemote.length > 0;
 
   // Cypher UI state
   const inQueue = !!cypher && !!myHandle && cypher.queue.includes(myHandle);
@@ -469,10 +650,48 @@ export default function ChatRoom({ room, displayName, me, onPresence, onOpenDm }
       {/* Video strip */}
       {hasVideo && (
         <div className="flex gap-2 overflow-x-auto border-b border-white/5 bg-black/40 p-2">
-          {live && localStream && <VideoTile stream={localStream} label={`${displayName} (you)`} muted />}
-          {Object.entries(remoteStreams).map(([peerId, entry]) => (
-            <VideoTile key={peerId} stream={entry.stream} label={entry.name} />
+          {live && localStream && (
+            <VideoTile
+              stream={localStream}
+              label={`${displayName} (you)${micMuted ? ' — muted' : ''}${blackedOut ? ' — blacked out' : ''}`}
+              muted
+              blackedOut={blackedOut}
+            />
+          )}
+          {renderedRemote.map(([peerId, entry]) => (
+            audioOnlyMode ? (
+              <AudioTile key={peerId} stream={entry.stream} label={entry.name} />
+            ) : (
+              <VideoTile
+                key={peerId}
+                stream={entry.stream}
+                label={entry.name}
+                peerMuted={!!(peerStates[peerId] && peerStates[peerId].muted)}
+                blackedOut={!!(peerStates[peerId] && peerStates[peerId].blackedOut)}
+              />
+            )
           ))}
+        </div>
+      )}
+
+      {/* Incoming call (DMs) */}
+      {callState === 'incoming' && incomingFrom && (
+        <div className="flex flex-wrap items-center gap-2 border-b border-rose-400/30 bg-gradient-to-r from-rose-950/80 to-pink-950/60 px-3 py-2.5">
+          <span className="live-dot" />
+          <p className="min-w-0 flex-1 text-sm font-bold text-white">
+            📹 @{incomingFrom.fromHandle} is calling you
+          </p>
+          <button type="button" onClick={acceptCall} className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-black uppercase text-white shadow-lg shadow-emerald-950/50">
+            Accept
+          </button>
+          <button type="button" onClick={declineCall} className="rounded-lg bg-rose-600 px-4 py-2 text-xs font-black uppercase text-white shadow-lg shadow-rose-950/50">
+            Deny
+          </button>
+        </div>
+      )}
+      {chatNotice && (
+        <div className="border-b border-white/[0.06] bg-white/[0.04] px-3 py-2 text-center text-[11px] font-bold text-slate-300">
+          {chatNotice}
         </div>
       )}
 
@@ -545,7 +764,11 @@ export default function ChatRoom({ room, displayName, me, onPresence, onOpenDm }
                   </button>
                 )}
                 {amCurrent && !live && (
-                  <span className="text-[11px] font-bold text-amber-200">Hit 📹 Go Live so the room can hear you.</span>
+                  <span className="text-[11px] font-bold text-amber-200">
+                    {myVideoOff
+                      ? 'Your video is off in your settings, so you can\'t perform right now — listening only.'
+                      : 'Hit 📹 Go Live so the room can hear you.'}
+                  </span>
                 )}
               </>
             ) : (
@@ -603,10 +826,53 @@ export default function ChatRoom({ room, displayName, me, onPresence, onOpenDm }
 
       {/* Input row */}
       <form onSubmit={handleSend} className="flex items-center gap-2 border-t border-white/[0.06] bg-[#070a12]/85 p-3 backdrop-blur-xl">
-        {live ? (
-          <button type="button" onClick={stopVideo} className="shrink-0 rounded-lg bg-rose-600 px-3 py-2 text-xs font-bold text-white shadow-lg shadow-rose-950/50">
-            Kill Cam
+        {myVideoOff ? (
+          <button
+            type="button"
+            onClick={() => (onOpenSettings ? onOpenSettings() : setChatNotice('Video is off in your settings — turn it on under Profile → Privacy & Safety.'))}
+            title="Video is disabled in your settings — tap to open them"
+            className="shrink-0 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-bold text-slate-500"
+          >
+            📹 Video off in your settings
           </button>
+        ) : live ? (
+          <>
+            <button type="button" onClick={stopVideo} className="shrink-0 rounded-lg bg-rose-600 px-3 py-2 text-xs font-bold text-white shadow-lg shadow-rose-950/50">
+              Kill Cam
+            </button>
+            <button
+              type="button"
+              onClick={toggleMute}
+              title={micMuted ? 'Unmute your mic' : 'Mute your mic'}
+              className={`shrink-0 rounded-lg px-3 py-2 text-xs font-bold shadow-md shadow-black/30 ${micMuted ? 'bg-amber-500 text-black' : 'border border-white/10 bg-white/5 text-slate-200'}`}
+            >
+              {micMuted ? '🔇 Muted' : '🎙 Mic on'}
+            </button>
+            <button
+              type="button"
+              onClick={toggleBlackout}
+              title={blackedOut ? 'Bring your camera back' : 'Black out your camera (stay in the session)'}
+              className={`shrink-0 rounded-lg px-3 py-2 text-xs font-bold shadow-md shadow-black/30 ${blackedOut ? 'bg-slate-200 text-black' : 'border border-white/10 bg-white/5 text-slate-200'}`}
+            >
+              {blackedOut ? '⬛ Blacked out' : '⬛ Blackout'}
+            </button>
+          </>
+        ) : isDm ? (
+          dmStatus === 'open' ? (
+            callState === 'calling' ? (
+              <button type="button" onClick={cancelCall} className="shrink-0 rounded-lg bg-amber-500 px-3 py-2 text-xs font-black text-black shadow-lg shadow-amber-950/50">
+                📞 Calling… ✕
+              </button>
+            ) : (
+              <button type="button" onClick={startCall} className="shrink-0 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-bold text-slate-200 shadow-md shadow-black/30">
+                📹 Call
+              </button>
+            )
+          ) : (
+            <button type="button" disabled title="Video unlocks when the conversation is accepted" className="shrink-0 cursor-not-allowed rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-bold text-slate-500">
+              📹 Call — after they accept
+            </button>
+          )
         ) : (
           <button type="button" onClick={startVideo} className="shrink-0 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-bold text-slate-200 shadow-md shadow-black/30">
             📹 Go Live
@@ -616,10 +882,19 @@ export default function ChatRoom({ room, displayName, me, onPresence, onOpenDm }
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder={`Message ${room}...`}
-          className="flex-1 rounded-xl border border-white/[0.06] bg-white/[0.05] px-4 py-2 text-sm text-slate-100 outline-none"
+          disabled={dmLocked || (isDm && dmStatus === 'pending')}
+          placeholder={
+            dmLocked
+              ? 'This conversation is unavailable'
+              : isDm && dmStatus === 'pending'
+                ? `Waiting for @${dmPeer} to accept your request…`
+                : isDm && dmStatus === 'none'
+                  ? `First message to @${dmPeer} goes as a request…`
+                  : `Message ${room}...`
+          }
+          className="flex-1 rounded-xl border border-white/[0.06] bg-white/[0.05] px-4 py-2 text-sm text-slate-100 outline-none disabled:opacity-50"
         />
-        <button type="submit" className="shrink-0 rounded-xl bg-gradient-to-r from-rose-500 to-pink-600 px-4 py-2 text-xs font-bold uppercase text-white shadow-lg shadow-rose-950/50">
+        <button type="submit" disabled={dmLocked || (isDm && dmStatus === 'pending')} className="shrink-0 rounded-xl bg-gradient-to-r from-rose-500 to-pink-600 px-4 py-2 text-xs font-bold uppercase text-white shadow-lg shadow-rose-950/50 disabled:opacity-50">
           Send
         </button>
       </form>

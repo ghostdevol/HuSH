@@ -10,7 +10,7 @@ const DEFAULT_ROOMS = [
   { id: 'vip', name: '👑 VIP Chambers' }
 ];
 
-export default function RoomsPage({ me, guestName, setGuestName, onPresence, goDm }) {
+export default function RoomsPage({ me, guestName, setGuestName, onPresence, goDm, go }) {
   const [activeRoom, setActiveRoom] = useState('lobby');
   const [rooms, setRooms] = useState(DEFAULT_ROOMS);
   const [newRoom, setNewRoom] = useState('');
@@ -190,7 +190,7 @@ export default function RoomsPage({ me, guestName, setGuestName, onPresence, goD
         )}
       </div>
       <div className="min-h-0 flex-1">
-        <ChatRoom key={activeRoom + displayName} room={activeRoom} displayName={displayName} me={me} onPresence={onPresence} onOpenDm={me && goDm ? goDm : undefined} />
+        <ChatRoom key={activeRoom + displayName} room={activeRoom} displayName={displayName} me={me} onPresence={onPresence} onOpenDm={me && goDm ? goDm : undefined} onOpenSettings={go ? () => go('profile') : undefined} />
       </div>
     </div>
   );

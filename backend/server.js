@@ -7,8 +7,15 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { WebSocketServer, WebSocket } = require('ws');
+const antiscam = require('./antiscam');
 
 const app = express();
+// Render sits in front of this app as a proxy. IP evidence comes from
+// the FIRST X-Forwarded-For hop when present (req.ip honors it with
+// trust proxy on), falling back to the raw socket address. That is
+// the IP source for registration records, login records, flag records
+// and the ban list. (Daniel: "Run it by ip address.")
+app.set('trust proxy', true);
 // 15mb so photo (3 MB) and track (10 MB) base64 uploads fit.
 app.use(express.json({ limit: '15mb' }));
 
@@ -40,6 +47,11 @@ app.use(cors({
 }));
 
 const PORT = process.env.PORT || 10000;
+const LEGAL_VERSION = '1.0';
+// Admin handles (lowercase) — Daniel's admin lane: view ban/moderation
+// state, ban and unban. Keyed by env so no public unban UI exists.
+const ADMIN_HANDLES = (process.env.ADMIN_HANDLES || '')
+  .split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
 
 // Create ONE unified HTTP + WebSocket Server
 const server = http.createServer(app);
@@ -78,7 +90,11 @@ function saveJson(file, data) {
   fs.renameSync(tmp, file);
 }
 
-// users: { [handle]: { handle, salt, passHash, displayName, bio, avatarEmoji, createdAt, following: [] } }
+// users: { [handle]: { handle, salt, passHash, displayName, bio, avatarEmoji, createdAt, following: [],
+//   blocked: [], dmAccepted: [], dmDenied: [], dmRequests: [], innerFive: [],
+//   privacy: { dmFrom, videoFrom, profileVisibility, invisible, videoEnabled },
+//   email/phone (private), regIp/lastLoginIp/ipHistory (private),
+//   legal: {version, acceptedAt}|null, warnings: [], signalHits: {}, banned: null|{...} } }
 const users = loadJson(USERS_FILE, {});
 // posts: [ { id, author, text, createdAt, photoId, likes: [], comments: [ { id, author, text, createdAt } ] } ]
 const posts = loadJson(POSTS_FILE, []);
@@ -100,6 +116,16 @@ app.use('/uploads', express.static(UPLOADS_DIR, {
 // Same Render-ephemeral-filesystem caveat as photos.
 const TRACKS_FILE = path.join(__dirname, 'tracks.json');
 const tracks = loadJson(TRACKS_FILE, []);
+// Ban list + moderation log (v1.2.0): persisted server-side only.
+const BANS_FILE = path.join(__dirname, 'bans.json');
+const MODERATION_FILE = path.join(__dirname, 'moderation.json');
+const bans = loadJson(BANS_FILE, { emails: [], phones: [], ips: [], records: [] });
+if (!Array.isArray(bans.emails)) bans.emails = [];
+if (!Array.isArray(bans.phones)) bans.phones = [];
+if (!Array.isArray(bans.ips)) bans.ips = [];
+if (!Array.isArray(bans.records)) bans.records = [];
+let moderationLog = loadJson(MODERATION_FILE, []);
+if (!Array.isArray(moderationLog)) moderationLog = [];
 // sessions: token -> handle
 const sessions = new Map();
 
@@ -107,6 +133,275 @@ function saveUsers() { saveJson(USERS_FILE, users); }
 function savePosts() { saveJson(POSTS_FILE, posts); }
 function savePhotos() { saveJson(PHOTOS_FILE, photos); }
 function saveTracks() { saveJson(TRACKS_FILE, tracks); }
+function saveBans() { saveJson(BANS_FILE, bans); }
+function saveModeration() { saveJson(MODERATION_FILE, moderationLog); }
+
+// ===================== IP EVIDENCE =====================
+function clientIp(req) {
+  return (req.ip || (req.socket && req.socket.remoteAddress) || 'unknown').toString().replace(/^::ffff:/, '');
+}
+function wsClientIp(req) {
+  const xff = (req.headers['x-forwarded-for'] || '').toString().split(',')[0].trim();
+  return (xff || (req.socket && req.socket.remoteAddress) || 'unknown').toString().replace(/^::ffff:/, '');
+}
+// Rolling per-account IP history (server-side only, capped at 20).
+function noteIp(user, ip, kind) {
+  if (!user || !ip || ip === 'unknown') return;
+  const hist = Array.isArray(user.ipHistory) ? user.ipHistory : (user.ipHistory = []);
+  const existing = hist.find((e) => e.ip === ip);
+  if (existing) { existing.at = Date.now(); existing.kind = kind; }
+  else hist.push({ ip, at: Date.now(), kind });
+  if (hist.length > 20) user.ipHistory = hist.slice(-20);
+}
+function userIps(user) {
+  const set = new Set();
+  if (user.regIp) set.add(user.regIp);
+  if (user.lastLoginIp) set.add(user.lastLoginIp);
+  (user.ipHistory || []).forEach((e) => set.add(e.ip));
+  return [...set];
+}
+
+// ===================== USER SHAPE (additive migration) =====================
+// Every account ever created keeps working; new fields arrive with
+// defaults. Daniel (user #1) is grandfathered — never locked out.
+function defaultPrivacy() {
+  return { dmFrom: 'everyone', videoFrom: 'everyone', profileVisibility: 'everyone', invisible: false, videoEnabled: true };
+}
+function ensureUserShape(u) {
+  let changed = false;
+  const fill = (key, val) => { if (u[key] === undefined) { u[key] = val; changed = true; } };
+  fill('blocked', []);
+  fill('dmAccepted', []);
+  fill('dmDenied', []);
+  fill('dmRequests', []);
+  fill('innerFive', []);
+  fill('email', null);
+  fill('phone', null);
+  fill('emailNorm', null);
+  fill('phoneNorm', null);
+  fill('regIp', null);
+  fill('lastLoginIp', null);
+  fill('ipHistory', []);
+  fill('legal', null);
+  fill('warnings', []);
+  fill('signalHits', {});
+  fill('banned', null);
+  if (!Array.isArray(u.following)) { u.following = []; changed = true; }
+  if (!u.privacy || typeof u.privacy !== 'object') { u.privacy = defaultPrivacy(); changed = true; }
+  for (const [k, v] of Object.entries(defaultPrivacy())) {
+    if (u.privacy[k] === undefined) { u.privacy[k] = v; changed = true; }
+  }
+  return changed;
+}
+{
+  let migrated = false;
+  for (const u of Object.values(users)) if (ensureUserShape(u)) migrated = true;
+  if (migrated) saveUsers();
+}
+
+const getUser = (handle) => users[(handle || '').toLowerCase()] || null;
+const uid = () => crypto.randomBytes(9).toString('base64url');
+
+function normalizeEmail(email) {
+  const e = (email || '').toString().trim().toLowerCase();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) ? e : null;
+}
+// Strip spaces/dashes/parens; a leading 1 (US country code) folds away
+// so "(320) 555-1234", "+1 320 555 1234" and "3205551234" are one number.
+function normalizePhone(phone) {
+  let digits = (phone || '').toString().replace(/\D/g, '');
+  if (digits.length === 11 && digits.startsWith('1')) digits = digits.slice(1);
+  return digits.length === 10 ? digits : null;
+}
+
+// ===================== RELATIONSHIPS =====================
+const isFollowing = (a, b) => { const u = users[a]; return !!u && u.following.includes(b); };
+const isConfidant = (a, b) => isFollowing(a, b) && isFollowing(b, a);
+function confidantsOf(handle) {
+  const u = users[handle];
+  if (!u) return [];
+  return u.following.filter((h) => isFollowing(h, handle));
+}
+function blockRelation(a, b) {
+  return {
+    byA: !!users[a] && (users[a].blocked || []).includes(b),
+    byB: !!users[b] && (users[b].blocked || []).includes(a)
+  };
+}
+const anyBlock = (a, b) => { const r = blockRelation(a, b); return r.byA || r.byB; };
+// A DM pair is "open" once either side accepted the other's request
+// (or an established conversation exists from before this system).
+const pairOpen = (a, b) =>
+  !!users[a] && !!users[b] &&
+  ((users[a].dmAccepted || []).includes(b) || (users[b].dmAccepted || []).includes(a));
+function canViewProfile(viewer, target) {
+  const t = users[target];
+  if (!t) return false;
+  if (viewer === target) return true;
+  if ((t.privacy.profileVisibility || 'everyone') !== 'confidants') return true;
+  return !!viewer && isConfidant(viewer, target);
+}
+
+// ===================== MODERATION LOG + BAN MACHINERY =====================
+// Every flag/warning/ban event carries its IP evidence: the account's
+// known IPs (registration + recent logins) ride along on the record.
+// Admin-only visibility (ADMIN_HANDLES); never public.
+function logModeration(entry) {
+  moderationLog.push({ id: uid(), at: Date.now(), ...entry });
+  if (moderationLog.length > 500) moderationLog = moderationLog.slice(-500);
+  saveModeration();
+}
+function revokeSessions(handle) {
+  for (const [token, h] of [...sessions.entries()]) if (h === handle) sessions.delete(token);
+  wss.clients.forEach((client) => {
+    if (client.handle === handle) {
+      try { client.send(JSON.stringify({ type: 'banned', message: 'This account is banned' })); } catch (err) { /* ignore */ }
+      try { client.terminate(); } catch (err) { /* ignore */ }
+    }
+  });
+}
+// The one permanent-ban path: dupe accounts, the post-warning scam
+// ladder, and the opener-trio rule all land here. Identifiers
+// (email/phone) + the account's IPs join the ban list so
+// re-registration from them is refused.
+function banUser(handle, reason, signals = []) {
+  const u = users[handle];
+  if (!u || u.banned) return false;
+  const ips = userIps(u);
+  u.banned = { at: Date.now(), reason, signals };
+  if (u.emailNorm && !bans.emails.includes(u.emailNorm)) bans.emails.push(u.emailNorm);
+  if (u.phoneNorm && !bans.phones.includes(u.phoneNorm)) bans.phones.push(u.phoneNorm);
+  for (const ip of ips) if (!bans.ips.includes(ip)) bans.ips.push(ip);
+  bans.records.push({ handle, at: Date.now(), reason, signals, ips, email: u.emailNorm, phone: u.phoneNorm });
+  saveBans();
+  saveUsers();
+  revokeSessions(handle);
+  logModeration({ handle, kind: 'ban', signals, ips, detail: reason });
+  console.log(`BAN: ${handle} — ${reason}`);
+  return true;
+}
+function unbanUser(handle) {
+  const u = users[handle];
+  if (!u) return false;
+  u.banned = null;
+  if (u.emailNorm) bans.emails = bans.emails.filter((e) => e !== u.emailNorm);
+  if (u.phoneNorm) bans.phones = bans.phones.filter((p) => p !== u.phoneNorm);
+  const mine = userIps(u);
+  bans.records = bans.records.filter((r) => r.handle !== handle);
+  const stillAnchored = new Set();
+  for (const r of bans.records) (r.ips || []).forEach((ip) => stillAnchored.add(ip));
+  bans.ips = bans.ips.filter((ip) => stillAnchored.has(ip) || !mine.includes(ip));
+  saveBans();
+  saveUsers();
+  logModeration({ handle, kind: 'unban', signals: [], ips: mine, detail: 'Admin lifted the ban (mistake / server-error exception)' });
+  return true;
+}
+
+// ===================== ANTI-SCAM ASSESSMENT =====================
+// Signal state lives on the user record: signalHits[id] =
+// {count, firstAt, lastAt}. Score sums weights over DISTINCT types.
+function signalScore(hits, sinceTs = 0) {
+  let score = 0;
+  const types = [];
+  for (const [id, hit] of Object.entries(hits || {})) {
+    if (sinceTs && hit.lastAt < sinceTs) continue;
+    const def = antiscam.SIGNAL_BY_ID[id] || antiscam.NAME_SIGNAL_DEFS.find((d) => d.id === id);
+    score += def ? def.weight : 1;
+    types.push(id);
+  }
+  return { score, types };
+}
+function notifyUser(handle, payload) {
+  wss.clients.forEach((client) => {
+    if (client.handle === handle && client.readyState === WebSocket.OPEN) {
+      try { client.send(JSON.stringify(payload)); } catch (err) { /* ignore */ }
+    }
+  });
+}
+function recordSignals(user, signalIds, context) {
+  if (!user || user.banned || !signalIds || !signalIds.length) return;
+  const ts = Date.now();
+  for (const id of signalIds) {
+    const prev = user.signalHits[id];
+    user.signalHits[id] = { count: (prev ? prev.count : 0) + 1, firstAt: prev ? prev.firstAt : ts, lastAt: ts };
+  }
+  saveUsers();
+  const warnedAt = user.warnings.length ? user.warnings[user.warnings.length - 1].at : 0;
+  const total = signalScore(user.signalHits);
+  const postWarning = warnedAt ? signalScore(user.signalHits, warnedAt + 1) : { score: 0, types: [] };
+  const ips = userIps(user);
+  logModeration({
+    handle: user.handle, kind: 'flag', signals: signalIds, ips,
+    detail: `${context} — total score ${total.score}, post-warning score ${postWarning.score}`
+  });
+  if (!warnedAt && total.score > 5) {
+    user.warnings.push({ at: ts, signals: total.types, score: total.score, context });
+    saveUsers();
+    logModeration({ handle: user.handle, kind: 'warning', signals: total.types, ips, detail: `Formal warning issued (${context})` });
+    notifyUser(user.handle, {
+      type: 'moderation', kind: 'warning',
+      message: '⚠️ Account warning: your recent activity matches patterns from the scammer playbook in the HuSH Site Rules. This is a formal warning — correct it, or the account is gone. An admin reviews every flag.'
+    });
+  } else if (warnedAt && postWarning.score > 5) {
+    banUser(user.handle, 'Scam-playbook signals crossed the line again after a formal warning', postWarning.types);
+  }
+}
+function assessContent(user, text, context) {
+  if (!user || !text) return;
+  recordSignals(user, antiscam.assessText(text), context);
+}
+function assessNameSignals(user) {
+  if (!user) return;
+  recordSignals(user, antiscam.assessName(user.displayName, user.handle), 'profile name');
+}
+
+// Opener-trio tracking (Daniel's hard rule): per ordered pair, the
+// sender's first QUESTION intents to a NEW (not-yet-open) DM contact.
+// In-memory by design: opening exchanges are live-session events.
+const trioState = new Map(); // `${from}>${to}` -> [ 'age'|'location'|'intent'|'other', ... ]
+// Behavioral counters for stateful signals.
+const massDmState = new Map();  // handle -> { windowStart, recipients: Set }
+const repeatState = new Map();  // handle -> { text, count, windowStart }
+const insultState = new Map();  // handle -> { windowStart, count }
+const openerState = new Map();  // `${from}>${to}` -> count of opening messages
+
+function checkMassDm(sender, recipient) {
+  const now = Date.now();
+  let st = massDmState.get(sender);
+  if (!st || now - st.windowStart > 10 * 60 * 1000) st = { windowStart: now, recipients: new Set(), firedAt: 0 };
+  st.recipients.add(recipient);
+  massDmState.set(sender, st);
+  if (st.recipients.size >= 5 && now - (st.firedAt || 0) > 60 * 60 * 1000) {
+    st.firedAt = now;
+    return true;
+  }
+  return false;
+}
+function checkRepeat(sender, text) {
+  const now = Date.now();
+  const norm = (text || '').trim().toLowerCase();
+  let st = repeatState.get(sender);
+  if (!st || now - st.windowStart > 60 * 1000 || st.text !== norm) st = { text: norm, count: 0, windowStart: now };
+  st.count += 1;
+  repeatState.set(sender, st);
+  return st.count >= 8; // bait-and-flood: same line 8+ times in a minute
+}
+function checkInsults(sender, text) {
+  if (!antiscam.INSULT_RE.test(text || '')) return false;
+  const now = Date.now();
+  let st = insultState.get(sender);
+  if (!st || now - st.windowStart > 10 * 60 * 1000) st = { windowStart: now, count: 0 };
+  st.count += 1;
+  insultState.set(sender, st);
+  return st.count >= 3;
+}
+// Stateful signals that ride along with every assessed message.
+function behavioralSignals(sender, text, isRoomMessage) {
+  const hits = [];
+  if (checkRepeat(sender, text) && isRoomMessage) hits.push('trolling');
+  if (checkInsults(sender, text)) hits.push('trolling');
+  return hits;
+}
 
 function serializePhoto(p) {
   return { id: p.id, owner: p.owner, caption: p.caption, createdAt: p.createdAt, url: '/uploads/' + p.filename };
@@ -146,19 +441,95 @@ function publicProfile(u) {
     themeId: u.themeId || 'midnight',
     followerCount: Object.values(users).filter(x => x.following.includes(u.handle)).length,
     followingCount: u.following.length,
-    postCount: posts.filter(p => p.author === u.handle).length
+    postCount: posts.filter(p => p.author === u.handle).length,
+    // v1.2.0 social graph extras
+    confidantCount: confidantsOf(u.handle).length,
+    innerFive: Array.isArray(u.innerFive) ? u.innerFive : []
   };
+}
+
+// The OWNER's view of their own profile — the only place private
+// fields (email, phone, privacy prefs, block list, legal acceptance,
+// warnings) ever leave the server. Never used for other users.
+function selfProfile(u) {
+  return {
+    ...publicProfile(u),
+    email: u.email || null,
+    phone: u.phone || null,
+    privacy: { ...defaultPrivacy(), ...(u.privacy || {}) },
+    blocked: [...(u.blocked || [])],
+    blockedUsers: (u.blocked || []).map((h) => authorSummary(h)),
+    confidants: confidantsOf(u.handle),
+    legal: u.legal || null,
+    legalVersion: LEGAL_VERSION,
+    warnings: (u.warnings || []).map((w) => ({ at: w.at, signals: w.signals, score: w.score })),
+    banned: !!u.banned
+  };
+}
+
+// Limited profile for confidants-only accounts viewed by outsiders:
+// identity is visible (so people can follow / request / block), the
+// profile's content is not.
+function limitedProfile(u) {
+  return {
+    handle: u.handle,
+    displayName: u.displayName,
+    avatarEmoji: u.avatarEmoji,
+    avatarMode: u.avatarMode || 'emoji',
+    avatar: u.avatar || null,
+    avatarPhotoUrl: u.avatarPhotoId
+      ? (() => { const p = photos.find(x => x.id === u.avatarPhotoId); return p ? '/uploads/' + p.filename : null; })()
+      : null,
+    createdAt: u.createdAt,
+    profilePrivate: true,
+    followerCount: Object.values(users).filter(x => x.following.includes(u.handle)).length,
+    confidantCount: confidantsOf(u.handle).length
+  };
+}
+
+function dmStatusFor(me, target) {
+  const rel = blockRelation(me, target);
+  if (rel.byA) return 'blocked-by-me';
+  if (rel.byB) return 'not-accepted';
+  if (pairOpen(me, target)) return 'open';
+  const t = users[target];
+  const m = users[me];
+  if ((t.dmDenied || []).includes(me)) return 'not-accepted';
+  if ((t.dmRequests || []).some((r) => r.from === me)) return 'pending';
+  if ((m.dmRequests || []).some((r) => r.from === target)) return 'incoming';
+  return 'none';
+}
+function canVideoWith(me, target) {
+  const m = users[me];
+  const t = users[target];
+  if (!m || !t) return { can: false, reason: 'unavailable' };
+  if (!m.privacy.videoEnabled) return { can: false, reason: 'your-video-off' };
+  if (!t.privacy.videoEnabled) return { can: false, reason: 'video-unavailable' };
+  if (!pairOpen(me, target)) return { can: false, reason: 'not-accepted' };
+  const vf = t.privacy.videoFrom || 'everyone';
+  if (vf === 'nobody') return { can: false, reason: 'video-unavailable' };
+  if (vf === 'confidants' && !isConfidant(me, target)) return { can: false, reason: 'confidants-only' };
+  return { can: true };
 }
 
 function authHandle(req) {
   const token = req.headers['x-hush-token'];
   if (!token) return null;
-  return sessions.get(token) || null;
+  const handle = sessions.get(token) || null;
+  if (handle && users[handle] && users[handle].banned) return null; // banned = tokens dead
+  return handle;
 }
 
 function requireAuth(req, res) {
   const handle = authHandle(req);
   if (!handle) { res.status(401).json({ error: 'Login required' }); return null; }
+  return handle;
+}
+
+function requireAdmin(req, res) {
+  const handle = requireAuth(req, res);
+  if (!handle) return null;
+  if (!ADMIN_HANDLES.includes(handle)) { res.status(403).json({ error: 'Admin only' }); return null; }
   return handle;
 }
 
@@ -188,6 +559,19 @@ function serializePost(p, meHandle) {
     likedByMe: meHandle ? p.likes.includes(meHandle) : false,
     commentCount: p.comments.length
   };
+}
+// A post is visible to a viewer when: no block either way with the
+// author, and the author's visibility allows it.
+function postVisibleTo(p, me) {
+  const author = users[p.author];
+  if (!author) return false;
+  if (me) {
+    if (p.author !== me && anyBlock(me, p.author)) return false;
+    if (!canViewProfile(me, p.author)) return false;
+  } else if ((author.privacy.profileVisibility || 'everyone') === 'confidants') {
+    return false;
+  }
+  return true;
 }
 
 const HANDLE_RE = /^[a-z0-9_]{3,20}$/;
@@ -236,8 +620,30 @@ app.post('/auth/register', (req, res) => {
   if (!HANDLE_RE.test(handle)) return res.status(400).json({ error: 'Handle must be 3-20 chars: lowercase letters, numbers, underscore' });
   if (password.length < 4) return res.status(400).json({ error: 'Password must be at least 4 characters' });
   if (users[handle]) return res.status(409).json({ error: 'Handle already taken' });
+  // Registration integrity (v1.2.0): one account per person — an email
+  // AND a phone number are required and each must be unique. This is
+  // uniqueness of CLAIMED identifiers; no verification code is sent.
+  const emailNorm = normalizeEmail(req.body.email);
+  if (!emailNorm) return res.status(400).json({ error: 'A valid email address is required to register' });
+  const phoneNorm = normalizePhone(req.body.phone);
+  if (!phoneNorm) return res.status(400).json({ error: 'A valid 10-digit phone number is required to register' });
+  if (req.body.legalAccepted !== true) {
+    return res.status(400).json({ error: 'You must agree to the Site Rules, Privacy Policy and Terms of Use to register' });
+  }
+  const ip = clientIp(req);
+  // Ban list first: banned identifiers and banned IPs cannot register.
+  if (bans.emails.includes(emailNorm) || bans.phones.includes(phoneNorm) || bans.ips.includes(ip)) {
+    logModeration({ handle, kind: 'evasion', signals: [], ips: [ip], detail: 'Registration refused — banned identifier or IP' });
+    return res.status(403).json({ error: 'Registration refused: this email, phone number or network has been banned from HuSH' });
+  }
+  if (Object.values(users).some((u) => u.emailNorm === emailNorm)) {
+    return res.status(409).json({ error: 'That email is already registered to an account — one account per person' });
+  }
+  if (Object.values(users).some((u) => u.phoneNorm === phoneNorm)) {
+    return res.status(409).json({ error: 'That phone number is already registered to an account — one account per person' });
+  }
   const salt = crypto.randomBytes(16).toString('hex');
-  users[handle] = {
+  const rec = {
     handle,
     salt,
     passHash: hashPassword(password, salt),
@@ -258,12 +664,23 @@ app.post('/auth/register', (req, res) => {
     avatarPhotoId: null,
     themeId: 'midnight',
     createdAt: Date.now(),
-    following: []
+    following: [],
+    email: emailNorm,
+    phone: phoneNorm,
+    emailNorm,
+    phoneNorm,
+    regIp: ip,
+    lastLoginIp: ip,
+    ipHistory: [{ ip, at: Date.now(), kind: 'register' }],
+    legal: { version: LEGAL_VERSION, acceptedAt: Date.now() }
   };
+  ensureUserShape(rec);
+  users[handle] = rec;
   saveUsers();
+  assessNameSignals(rec); // name patterns score from day one (never ban alone)
   const token = crypto.randomBytes(24).toString('hex');
   sessions.set(token, handle);
-  res.json({ token, user: publicProfile(users[handle]) });
+  res.json({ token, user: selfProfile(users[handle]) });
 });
 
 app.post('/auth/login', (req, res) => {
@@ -275,21 +692,27 @@ app.post('/auth/login', (req, res) => {
   const ok = attempt.length === u.passHash.length &&
     crypto.timingSafeEqual(Buffer.from(attempt, 'hex'), Buffer.from(u.passHash, 'hex'));
   if (!ok) return res.status(401).json({ error: 'Invalid handle or password' });
+  if (u.banned) return res.status(403).json({ error: 'This account is banned', banned: true });
+  const ip = clientIp(req);
+  u.lastLoginIp = ip;
+  noteIp(u, ip, 'login');
+  saveUsers();
   const token = crypto.randomBytes(24).toString('hex');
   sessions.set(token, handle);
-  res.json({ token, user: publicProfile(u) });
+  res.json({ token, user: selfProfile(u) });
 });
 
 app.get('/me', (req, res) => {
   const handle = requireAuth(req, res);
   if (!handle) return;
-  res.json({ user: publicProfile(users[handle]) });
+  res.json({ user: selfProfile(users[handle]) });
 });
 
 app.put('/me', (req, res) => {
   const handle = requireAuth(req, res);
   if (!handle) return;
   const u = users[handle];
+  const prevDisplayName = u.displayName;
   if (typeof req.body.displayName === 'string') u.displayName = req.body.displayName.slice(0, 50);
   if (typeof req.body.bio === 'string') u.bio = req.body.bio.slice(0, 280);
   if (typeof req.body.avatarEmoji === 'string') u.avatarEmoji = req.body.avatarEmoji.slice(0, 8);
@@ -379,29 +802,115 @@ app.put('/me', (req, res) => {
     if (!THEME_IDS.includes(req.body.themeId)) return res.status(400).json({ error: 'Unknown theme' });
     u.themeId = req.body.themeId;
   }
+  // ---- v1.2.0 additions ----
+  // Privacy preferences — validated enums, safer-by-construction.
+  if (req.body.privacy !== undefined) {
+    const p = req.body.privacy;
+    if (!p || typeof p !== 'object') return res.status(400).json({ error: 'privacy must be an object' });
+    const next = { ...u.privacy };
+    if (p.dmFrom !== undefined) {
+      if (!['everyone', 'confidants', 'nobody'].includes(p.dmFrom)) return res.status(400).json({ error: 'dmFrom must be everyone, confidants or nobody' });
+      next.dmFrom = p.dmFrom;
+    }
+    if (p.videoFrom !== undefined) {
+      if (!['everyone', 'confidants', 'nobody'].includes(p.videoFrom)) return res.status(400).json({ error: 'videoFrom must be everyone, confidants or nobody' });
+      next.videoFrom = p.videoFrom;
+    }
+    if (p.profileVisibility !== undefined) {
+      if (!['everyone', 'confidants'].includes(p.profileVisibility)) return res.status(400).json({ error: 'profileVisibility must be everyone or confidants' });
+      next.profileVisibility = p.profileVisibility;
+    }
+    if (p.invisible !== undefined) next.invisible = !!p.invisible;
+    if (p.videoEnabled !== undefined) next.videoEnabled = !!p.videoEnabled;
+    u.privacy = next;
+  }
+  // The Inner Five — up to 5 of MY confidants, server-validated.
+  if (req.body.innerFive !== undefined) {
+    if (!Array.isArray(req.body.innerFive)) return res.status(400).json({ error: 'innerFive must be an array of handles' });
+    const picks = [...new Set(req.body.innerFive.map((h) => (h || '').toString().toLowerCase()))];
+    if (picks.length > 5) return res.status(400).json({ error: 'The Inner Five holds at most 5 people' });
+    const confs = confidantsOf(handle);
+    for (const pick of picks) {
+      if (!confs.includes(pick)) return res.status(400).json({ error: 'The Inner Five can only feature your Confidants' });
+    }
+    u.innerFive = picks;
+  }
+  // Bind email/phone (grandfathered accounts) — same uniqueness rules
+  // as registration. Private: only the owner ever sees these back.
+  if (req.body.email !== undefined) {
+    const emailNorm = normalizeEmail(req.body.email);
+    if (!emailNorm) return res.status(400).json({ error: 'A valid email address is required' });
+    if (Object.values(users).some((x) => x.handle !== handle && x.emailNorm === emailNorm)) {
+      return res.status(409).json({ error: 'That email is already registered to another account' });
+    }
+    u.email = emailNorm;
+    u.emailNorm = emailNorm;
+  }
+  if (req.body.phone !== undefined) {
+    const phoneNorm = normalizePhone(req.body.phone);
+    if (!phoneNorm) return res.status(400).json({ error: 'A valid 10-digit phone number is required' });
+    if (Object.values(users).some((x) => x.handle !== handle && x.phoneNorm === phoneNorm)) {
+      return res.status(409).json({ error: 'That phone number is already registered to another account' });
+    }
+    u.phone = phoneNorm;
+    u.phoneNorm = phoneNorm;
+  }
+  // Legal acceptance for existing accounts (shown once, recorded).
+  if (req.body.acceptLegal === true) {
+    u.legal = { version: LEGAL_VERSION, acceptedAt: Date.now() };
+  }
   saveUsers();
-  res.json({ user: publicProfile(u) });
+  // Name/bio text is assessed like any other content.
+  if (u.displayName !== prevDisplayName) assessNameSignals(u);
+  if (typeof req.body.bio === 'string' && req.body.bio) assessContent(u, u.bio, 'profile bio');
+  res.json({ user: selfProfile(u) });
 });
 
 app.get('/users', (req, res) => {
   const me = authHandle(req);
-  const list = Object.values(users).map(u => ({
-    ...publicProfile(u),
-    following: me ? users[me].following.includes(u.handle) : false,
-    isMe: me === u.handle
-  }));
+  const list = Object.values(users)
+    .filter((u) => !(me && u.handle !== me && anyBlock(me, u.handle))) // blocked pairs vanish both ways
+    .map(u => ({
+      ...publicProfile(u),
+      following: me ? users[me].following.includes(u.handle) : false,
+      isMe: me === u.handle,
+      confidant: me ? isConfidant(me, u.handle) : false,
+      blockedByMe: me ? (users[me].blocked || []).includes(u.handle) : false,
+      dmAccepted: me ? pairOpen(me, u.handle) : false
+    }));
   res.json({ users: list });
 });
 
+// My Confidants (mutual follows).
+app.get('/confidants', (req, res) => {
+  const me = requireAuth(req, res);
+  if (!me) return;
+  const list = confidantsOf(me).map((h) => ({ ...publicProfile(users[h]), author: authorSummary(h) }));
+  res.json({ confidants: list });
+});
+
 app.get('/users/:handle', (req, res) => {
-  const u = users[req.params.handle.toLowerCase()];
+  const target = req.params.handle.toLowerCase();
+  const u = users[target];
   if (!u) return res.status(404).json({ error: 'User not found' });
   const me = authHandle(req);
+  if (me && me !== target && anyBlock(me, target)) return res.status(404).json({ error: 'User not found' });
+  const rel = {
+    following: me ? users[me].following.includes(u.handle) : false,
+    isMe: me === u.handle,
+    confidant: me ? isConfidant(me, u.handle) : false,
+    blockedByMe: me ? (users[me].blocked || []).includes(u.handle) : false
+  };
+  if (me === target) return res.json({ user: { ...selfProfile(u), ...rel } });
+  if (!canViewProfile(me, target)) {
+    return res.json({ user: { ...limitedProfile(u), ...rel, dmStatus: me ? dmStatusFor(me, target) : 'none' } });
+  }
   res.json({
     user: {
       ...publicProfile(u),
-      following: me ? users[me].following.includes(u.handle) : false,
-      isMe: me === u.handle
+      ...rel,
+      innerFiveUsers: (u.innerFive || []).map((h) => authorSummary(h)),
+      dmStatus: me ? dmStatusFor(me, target) : 'none'
     }
   });
 });
@@ -410,6 +919,8 @@ app.get('/users/:handle/posts', (req, res) => {
   const handle = req.params.handle.toLowerCase();
   if (!users[handle]) return res.status(404).json({ error: 'User not found' });
   const me = authHandle(req);
+  if (me && me !== handle && anyBlock(me, handle)) return res.status(404).json({ error: 'User not found' });
+  if (!canViewProfile(me, handle)) return res.status(403).json({ error: 'This profile is confidants-only' });
   const list = posts
     .filter(p => p.author === handle)
     .sort((a, b) => b.createdAt - a.createdAt)
@@ -420,6 +931,9 @@ app.get('/users/:handle/posts', (req, res) => {
 app.get('/users/:handle/photos', (req, res) => {
   const handle = req.params.handle.toLowerCase();
   if (!users[handle]) return res.status(404).json({ error: 'User not found' });
+  const me = authHandle(req);
+  if (me && me !== handle && anyBlock(me, handle)) return res.status(404).json({ error: 'User not found' });
+  if (!canViewProfile(me, handle)) return res.status(403).json({ error: 'This profile is confidants-only' });
   const list = photos
     .filter(p => p.owner === handle)
     .sort((a, b) => b.createdAt - a.createdAt)
@@ -430,6 +944,9 @@ app.get('/users/:handle/photos', (req, res) => {
 app.get('/users/:handle/tracks', (req, res) => {
   const handle = req.params.handle.toLowerCase();
   if (!users[handle]) return res.status(404).json({ error: 'User not found' });
+  const me = authHandle(req);
+  if (me && me !== handle && anyBlock(me, handle)) return res.status(404).json({ error: 'User not found' });
+  if (!canViewProfile(me, handle)) return res.status(403).json({ error: 'This profile is confidants-only' });
   const list = tracks
     .filter(t => t.owner === handle)
     .sort((a, b) => b.createdAt - a.createdAt)
@@ -443,12 +960,162 @@ app.post('/users/:handle/follow', (req, res) => {
   const target = req.params.handle.toLowerCase();
   if (!users[target]) return res.status(404).json({ error: 'User not found' });
   if (target === me) return res.status(400).json({ error: 'Cannot follow yourself' });
+  if (anyBlock(me, target)) return res.status(403).json({ error: 'Unavailable' });
   const mine = users[me].following;
   const idx = mine.indexOf(target);
   let following;
   if (idx >= 0) { mine.splice(idx, 1); following = false; } else { mine.push(target); following = true; }
+  // Inner Five can only feature current confidants — prune on change.
+  users[me].innerFive = (users[me].innerFive || []).filter((h) => confidantsOf(me).includes(h));
+  users[target].innerFive = (users[target].innerFive || []).filter((h) => confidantsOf(target).includes(h));
   saveUsers();
   res.json({ following, user: publicProfile(users[target]) });
+});
+
+// ===================== BLOCK =====================
+app.post('/users/:handle/block', (req, res) => {
+  const me = requireAuth(req, res);
+  if (!me) return;
+  const target = req.params.handle.toLowerCase();
+  if (!users[target]) return res.status(404).json({ error: 'User not found' });
+  if (target === me) return res.status(400).json({ error: 'Cannot block yourself' });
+  const mine = users[me];
+  const theirs = users[target];
+  if (!mine.blocked.includes(target)) mine.blocked.push(target);
+  // Sever follows BOTH ways, drop from both Inner Fives, close the DM
+  // pair and clear any pending requests between the pair.
+  mine.following = mine.following.filter((h) => h !== target);
+  theirs.following = theirs.following.filter((h) => h !== me);
+  mine.innerFive = (mine.innerFive || []).filter((h) => h !== target);
+  theirs.innerFive = (theirs.innerFive || []).filter((h) => h !== me);
+  mine.dmAccepted = (mine.dmAccepted || []).filter((h) => h !== target);
+  theirs.dmAccepted = (theirs.dmAccepted || []).filter((h) => h !== me);
+  mine.dmRequests = (mine.dmRequests || []).filter((r) => r.from !== target);
+  theirs.dmRequests = (theirs.dmRequests || []).filter((r) => r.from !== me);
+  trioState.delete(`${me}>${target}`);
+  trioState.delete(`${target}>${me}`);
+  saveUsers();
+  // Drop any live signaling between the pair immediately.
+  wss.clients.forEach((client) => {
+    if (client.currentRoom && ((client.handle === me) || (client.handle === target))) {
+      broadcastRtcPeers(client.currentRoom);
+    }
+  });
+  res.json({ blocked: true });
+});
+
+app.post('/users/:handle/unblock', (req, res) => {
+  const me = requireAuth(req, res);
+  if (!me) return;
+  const target = req.params.handle.toLowerCase();
+  if (!users[target]) return res.status(404).json({ error: 'User not found' });
+  users[me].blocked = (users[me].blocked || []).filter((h) => h !== target);
+  saveUsers();
+  res.json({ blocked: false });
+});
+
+// ===================== DM REQUESTS =====================
+app.get('/dm/requests', (req, res) => {
+  const me = requireAuth(req, res);
+  if (!me) return;
+  const requests = (users[me].dmRequests || []).map((r) => ({
+    from: authorSummary(r.from),
+    at: r.at,
+    preview: r.preview
+  }));
+  res.json({ requests });
+});
+
+app.get('/dm/status/:handle', (req, res) => {
+  const me = requireAuth(req, res);
+  if (!me) return;
+  const target = req.params.handle.toLowerCase();
+  if (!users[target]) return res.status(404).json({ error: 'User not found' });
+  const video = canVideoWith(me, target);
+  res.json({ status: dmStatusFor(me, target), canVideo: video.can, videoReason: video.reason || null });
+});
+
+app.post('/dm/requests/:handle/accept', (req, res) => {
+  const me = requireAuth(req, res);
+  if (!me) return;
+  const from = req.params.handle.toLowerCase();
+  if (!users[from]) return res.status(404).json({ error: 'User not found' });
+  if (anyBlock(me, from)) return res.status(403).json({ error: 'Unavailable' });
+  const mine = users[me];
+  const reqEntry = (mine.dmRequests || []).find((r) => r.from === from);
+  mine.dmRequests = (mine.dmRequests || []).filter((r) => r.from !== from);
+  mine.dmDenied = (mine.dmDenied || []).filter((h) => h !== from);
+  if (!mine.dmAccepted.includes(from)) mine.dmAccepted.push(from);
+  saveUsers();
+  // If the requester is sitting in the DM room, deliver the held first
+  // message now so it isn't lost (chat here is live-only, no history).
+  const room = 'dm:' + [me, from].sort().join(':');
+  const clients = rooms.get(room);
+  if (clients && reqEntry && reqEntry.preview) {
+    for (const client of clients) {
+      if (client.readyState === WebSocket.OPEN) {
+        try {
+          client.send(JSON.stringify({ type: 'msg', room, user: from, text: reqEntry.preview, ts: reqEntry.at, held: true }));
+          client.send(JSON.stringify({ type: 'dm-accepted', room, by: me }));
+        } catch (err) { /* ignore */ }
+      }
+    }
+  }
+  notifyUser(from, { type: 'dm-accepted', room, by: me });
+  res.json({ status: 'open' });
+});
+
+app.post('/dm/requests/:handle/deny', (req, res) => {
+  const me = requireAuth(req, res);
+  if (!me) return;
+  const from = req.params.handle.toLowerCase();
+  if (!users[from]) return res.status(404).json({ error: 'User not found' });
+  const mine = users[me];
+  mine.dmRequests = (mine.dmRequests || []).filter((r) => r.from !== from);
+  if (!mine.dmDenied.includes(from)) mine.dmDenied.push(from);
+  saveUsers();
+  res.json({ status: 'not-accepted' });
+});
+
+// ===================== ADMIN (Daniel's lane) =====================
+app.get('/admin/overview', (req, res) => {
+  const admin = requireAdmin(req, res);
+  if (!admin) return;
+  const flagged = Object.values(users)
+    .filter((u) => u.banned || u.warnings.length || Object.keys(u.signalHits || {}).length)
+    .map((u) => ({
+      handle: u.handle,
+      banned: u.banned || null,
+      warnings: u.warnings,
+      signalHits: u.signalHits,
+      score: signalScore(u.signalHits).score,
+      ips: userIps(u),
+      regIp: u.regIp,
+      lastLoginIp: u.lastLoginIp
+    }));
+  res.json({
+    banlist: { emails: bans.emails, phones: bans.phones, ips: bans.ips },
+    records: bans.records.slice(-100),
+    moderationLog: moderationLog.slice(-100),
+    flagged
+  });
+});
+app.post('/admin/ban/:handle', (req, res) => {
+  const admin = requireAdmin(req, res);
+  if (!admin) return;
+  const target = req.params.handle.toLowerCase();
+  if (!users[target]) return res.status(404).json({ error: 'User not found' });
+  const reason = (req.body.reason || 'Banned by admin').toString().slice(0, 200);
+  banUser(target, reason, []);
+  res.json({ banned: true });
+});
+app.post('/admin/unban/:handle', (req, res) => {
+  const admin = requireAdmin(req, res);
+  if (!admin) return;
+  const target = req.params.handle.toLowerCase();
+  if (!users[target]) return res.status(404).json({ error: 'User not found' });
+  unbanUser(target);
+  res.json({ banned: false });
 });
 
 app.get('/feed', (req, res) => {
@@ -456,6 +1123,7 @@ app.get('/feed', (req, res) => {
   const limit = Math.min(parseInt(req.query.limit || '50', 10) || 50, 100);
   const feed = [...posts]
     .sort((a, b) => b.createdAt - a.createdAt)
+    .filter((p) => postVisibleTo(p, me))
     .slice(0, limit)
     .map(p => serializePost(p, me));
   res.json({ posts: feed });
@@ -490,6 +1158,7 @@ app.post('/posts', (req, res) => {
   }
   if (!text && !photoId) return res.status(400).json({ error: 'Post text required' });
   const post = createPostRecord(me, text, photoId);
+  assessContent(users[me], text, 'post');
   res.status(201).json({ post: serializePost(post, me) });
 });
 
@@ -498,6 +1167,8 @@ app.post('/posts/:id/like', (req, res) => {
   if (!me) return;
   const post = posts.find(p => p.id === req.params.id);
   if (!post) return res.status(404).json({ error: 'Post not found' });
+  if (post.author !== me && anyBlock(me, post.author)) return res.status(403).json({ error: 'Unavailable' });
+  if (!canViewProfile(me, post.author)) return res.status(403).json({ error: 'Unavailable' });
   const idx = post.likes.indexOf(me);
   let liked;
   if (idx >= 0) { post.likes.splice(idx, 1); liked = false; } else { post.likes.push(me); liked = true; }
@@ -508,9 +1179,12 @@ app.post('/posts/:id/like', (req, res) => {
 app.get('/posts/:id/comments', (req, res) => {
   const post = posts.find(p => p.id === req.params.id);
   if (!post) return res.status(404).json({ error: 'Post not found' });
-  const comments = post.comments.map(c => ({
-    id: c.id, text: c.text, createdAt: c.createdAt, author: authorSummary(c.author)
-  }));
+  const me = authHandle(req);
+  const comments = post.comments
+    .filter((c) => !(me && c.author !== me && anyBlock(me, c.author)))
+    .map(c => ({
+      id: c.id, text: c.text, createdAt: c.createdAt, author: authorSummary(c.author)
+    }));
   res.json({ comments });
 });
 
@@ -519,11 +1193,14 @@ app.post('/posts/:id/comments', (req, res) => {
   if (!me) return;
   const post = posts.find(p => p.id === req.params.id);
   if (!post) return res.status(404).json({ error: 'Post not found' });
+  if (post.author !== me && anyBlock(me, post.author)) return res.status(403).json({ error: 'Unavailable' });
+  if (!canViewProfile(me, post.author)) return res.status(403).json({ error: 'Unavailable' });
   const text = (req.body.text || '').toString().trim().slice(0, 500);
   if (!text) return res.status(400).json({ error: 'Comment text required' });
   const comment = { id: crypto.randomBytes(8).toString('hex'), author: me, text, createdAt: Date.now() };
   post.comments.push(comment);
   savePosts();
+  assessContent(users[me], text, 'comment');
   res.status(201).json({
     comment: { id: comment.id, text: comment.text, createdAt: comment.createdAt, author: authorSummary(me) },
     commentCount: post.comments.length
@@ -657,10 +1334,16 @@ app.delete('/tracks/:id', (req, res) => {
   res.json({ deleted: true });
 });
 
-// Presence: handles of currently connected, authenticated sockets
+// Presence: handles of currently connected, authenticated sockets.
+// Invisible users are NEVER broadcast — the server simply does not
+// report them as online, anywhere.
 function currentOnline() {
   const online = new Set();
-  for (const client of wss.clients) if (client.handle) online.add(client.handle);
+  for (const client of wss.clients) {
+    if (client.handle && !(users[client.handle] && users[client.handle].privacy.invisible)) {
+      online.add(client.handle);
+    }
+  }
   return Array.from(online).sort();
 }
 
@@ -728,7 +1411,8 @@ app.get('/health', (req, res) => {
     photos: photos.length,
     tracks: tracks.length,
     cyphers: cypherSessions.size,
-    online: currentOnline().length
+    online: currentOnline().length,
+    banned: Object.values(users).filter((u) => u.banned).length
   });
 });
 
@@ -859,24 +1543,63 @@ function leaveRoom(ws) {
   ws.currentRoom = null;
 }
 
+// ===================== DM ROOMS =====================
+// DM rooms are named dm:<handleA>:<handleB> (sorted). Only the two
+// named, logged-in users may join one.
+const isDmRoom = (room) => typeof room === 'string' && room.startsWith('dm:');
+function dmPairOf(room) {
+  const parts = room.split(':');
+  return parts.length === 3 ? [parts[1], parts[2]] : null;
+}
+// May `me` open a first contact with `target` right now? (Policy gate
+// for creating a NEW DM request; open pairs bypass it.)
+function dmPolicyAllows(me, target) {
+  const t = users[target];
+  if (!t) return false;
+  const policy = t.privacy.dmFrom || 'everyone';
+  if (policy === 'nobody') return false;
+  if (policy === 'confidants' && !isConfidant(me, target)) return false;
+  return true;
+}
+
 // ===================== WEBRTC SIGNALING (2026-10-15) =====================
 // Relay for rtc-offer / rtc-answer / rtc-ice between two sockets in the
 // same room, addressed by per-socket peerId. broadcastRtcPeers keeps
 // every room member's peer list current so clients know whom to call.
+// v1.2.0: peer lists are built PER RECIPIENT — blocked pairs never see
+// each other, and invisible users appear under a generic label (their
+// handle is never broadcast; global presence hides them entirely).
+
+function peerEntryFor(recipient, peer) {
+  const peerHandle = peer.handle || null;
+  const redacted = peerHandle && recipient.handle !== peerHandle &&
+    users[peerHandle] && users[peerHandle].privacy.invisible;
+  return {
+    id: peer.peerId,
+    name: redacted ? '🤫 Someone' : (peer.handle || peer.userName || 'User'),
+    live: !!peer.videoLive,
+    muted: !!peer.muted,
+    blackedOut: !!peer.blackedOut
+  };
+}
 
 function broadcastRtcPeers(room) {
   const clients = rooms.get(room);
   if (!clients) return;
-  const peers = Array.from(clients).map(c => ({
-    id: c.peerId,
-    name: c.handle || c.userName || 'User',
-    live: !!c.videoLive
-  }));
-  const payload = JSON.stringify({ type: 'rtc-peers', room, peers });
+  const all = Array.from(clients);
   for (const client of clients) {
-    if (client.readyState === WebSocket.OPEN) {
-      try { client.send(payload); } catch (err) { /* ignore dead sockets */ }
-    }
+    if (client.readyState !== WebSocket.OPEN) continue;
+    const visible = all.filter((peer) => {
+      if (peer === client) return true;
+      if (client.handle && peer.handle && anyBlock(client.handle, peer.handle)) return false;
+      return true;
+    });
+    try {
+      client.send(JSON.stringify({
+        type: 'rtc-peers', room,
+        peers: visible.map((peer) => peerEntryFor(client, peer))
+      }));
+    } catch (err) { /* ignore dead sockets */ }
   }
 }
 
@@ -886,6 +1609,26 @@ function findPeer(room, peerId) {
   for (const client of clients) {
     if (client.peerId === peerId) return client;
   }
+  return null;
+}
+
+// Signaling policy between two sockets. Returns null when allowed, or
+// an error message for the SENDER when refused.
+function signalingRefusal(fromWs, toWs, room, isLiveNote) {
+  const from = fromWs.handle;
+  const to = toWs ? toWs.handle : null;
+  if (from && to && anyBlock(from, to)) return 'Unavailable';
+  const fromUser = from ? users[from] : null;
+  if (fromUser && !fromUser.privacy.videoEnabled) return 'Video is disabled on your account';
+  if (isDmRoom(room)) {
+    // DM media is a call: both sides must have video on.
+    const toUser = to ? users[to] : null;
+    if (toUser && !toUser.privacy.videoEnabled) return 'Video is unavailable for this user';
+    if (!isLiveNote && from && to && !pairOpen(from, to)) return 'This conversation is not open for calls yet';
+  }
+  // Public/cypher rooms: receiving stays allowed for video-off users
+  // (listening to a cypher is receiving a performance, not a call) —
+  // their own publishing is refused above.
   return null;
 }
 
@@ -906,13 +1649,19 @@ wss.on('connection', (ws, request) => {
   ws.handle = null;
   ws.userName = null;
   ws.videoLive = false;
+  ws.muted = false;
+  ws.blackedOut = false;
+  ws.clientIp = wsClientIp(request);
   ws.peerId = crypto.randomBytes(6).toString('hex');
 
   // Presence auth via ?token= on the WS URL (the 'auth' message also works)
   try {
     const url = new URL(request.url, 'http://localhost');
     const token = url.searchParams.get('token');
-    if (token && sessions.has(token)) ws.handle = sessions.get(token);
+    if (token && sessions.has(token)) {
+      const h = sessions.get(token);
+      if (!users[h] || !users[h].banned) ws.handle = h;
+    }
   } catch (err) { /* non-fatal: socket just stays anonymous */ }
 
   // Everyone gets a presence snapshot on connect; authed joins also
@@ -940,7 +1689,12 @@ wss.on('connection', (ws, request) => {
     if (type === 'auth') {
       const token = (data.token || '').toString();
       if (sessions.has(token)) {
-        ws.handle = sessions.get(token);
+        const h = sessions.get(token);
+        if (users[h] && users[h].banned) {
+          ws.send(JSON.stringify({ type: 'error', code: 'banned', message: 'This account is banned' }));
+          return;
+        }
+        ws.handle = h;
         ws.send(JSON.stringify({ type: 'authed', handle: ws.handle }));
         broadcastPresence();
       } else {
@@ -954,6 +1708,19 @@ wss.on('connection', (ws, request) => {
       if (!room || typeof room !== 'string') {
         ws.send(JSON.stringify({ type: 'error', message: 'Room name required to join' }));
         return;
+      }
+      // DM rooms are private to the two named, logged-in users.
+      if (isDmRoom(room)) {
+        const pair = dmPairOf(room);
+        if (!pair || !ws.handle || !pair.includes(ws.handle)) {
+          ws.send(JSON.stringify({ type: 'error', code: 'dm-private', message: 'This conversation is private' }));
+          return;
+        }
+        const other = pair[0] === ws.handle ? pair[1] : pair[0];
+        if (!users[other]) {
+          ws.send(JSON.stringify({ type: 'error', code: 'dm-unavailable', message: 'Unavailable' }));
+          return;
+        }
       }
       if (typeof data.user === 'string') ws.userName = data.user.slice(0, 50);
       if (!rooms.has(room)) rooms.set(room, new Set());
@@ -980,6 +1747,71 @@ wss.on('connection', (ws, request) => {
       return;
     }
 
+    // ---- DM video call invites (v1.2.0) ----
+    // Starting video in a DM is an invitation, not an ambush: the
+    // server checks the pair, the recipient's call policy and both
+    // accounts' video switches before the callee's phone ever rings.
+    if (type === 'call-invite' || type === 'call-accept' || type === 'call-decline' || type === 'call-cancel') {
+      const room = ws.currentRoom || data.room;
+      if (!room || !isDmRoom(room)) {
+        ws.send(JSON.stringify({ type: 'error', code: 'call-failed', message: 'Calls only happen inside a DM' }));
+        return;
+      }
+      if (!ws.handle) {
+        ws.send(JSON.stringify({ type: 'error', code: 'call-failed', message: 'Login required to call' }));
+        return;
+      }
+      const pair = dmPairOf(room);
+      const other = pair[0] === ws.handle ? pair[1] : pair[0];
+      const otherUser = users[other];
+      const target = findPeer(room, (data.to || '').toString());
+      if (type === 'call-invite') {
+        const deny = (code, message) => ws.send(JSON.stringify({ type: 'call-unavailable', code, message }));
+        if (!otherUser || anyBlock(ws.handle, other)) return deny('unavailable', 'This call cannot be placed');
+        if (!users[ws.handle].privacy.videoEnabled) return deny('your-video-off', 'Video is disabled in your settings');
+        if (!otherUser.privacy.videoEnabled) return deny('video-unavailable', 'Video is unavailable for this user');
+        if (!pairOpen(ws.handle, other)) return deny('not-accepted', 'Accept the conversation before calling');
+        const policy = otherUser.privacy.videoFrom || 'everyone';
+        if (policy === 'nobody') return deny('video-unavailable', 'Video is unavailable for this user');
+        if (policy === 'confidants' && !isConfidant(ws.handle, other)) return deny('confidants-only', 'This user only takes calls from their Confidants');
+        if (!target) return deny('unavailable', 'They are not in this conversation right now');
+        try {
+          target.send(JSON.stringify({ type: 'call-incoming', room, from: ws.peerId, fromHandle: ws.handle }));
+        } catch (err) { return deny('unavailable', 'This call cannot be placed'); }
+        return;
+      }
+      // accept / decline / cancel relay to the named peer.
+      if (!target) {
+        ws.send(JSON.stringify({ type: 'error', code: 'call-failed', message: 'Peer not found' }));
+        return;
+      }
+      if (anyBlock(ws.handle, other)) {
+        ws.send(JSON.stringify({ type: 'error', code: 'call-failed', message: 'Unavailable' }));
+        return;
+      }
+      const outType = type === 'call-accept' ? 'call-accepted' : type === 'call-decline' ? 'call-declined' : 'call-cancelled';
+      try {
+        target.send(JSON.stringify({ type: outType, room, from: ws.peerId, fromHandle: ws.handle }));
+      } catch (err) { /* peer vanished mid-call */ }
+      return;
+    }
+
+    // Mic mute / camera blackout state notes — relayed room-wide so
+    // remote tiles render the real state (a blacked-out tile is
+    // labeled, never a silent frozen frame).
+    if (type === 'rtc-mute' || type === 'rtc-blackout') {
+      const room = ws.currentRoom || data.room;
+      if (!room) {
+        ws.send(JSON.stringify({ type: 'error', message: 'Not in a room' }));
+        return;
+      }
+      if (type === 'rtc-mute') ws.muted = !!data.muted;
+      else ws.blackedOut = !!data.blackedOut;
+      broadcastToRoom(room, { type, room, from: ws.peerId, muted: ws.muted, blackedOut: ws.blackedOut }, ws);
+      broadcastRtcPeers(room);
+      return;
+    }
+
     // WebRTC signaling relay — addressed peer-to-peer inside one room.
     // rtc-live is a room-wide note ("I started/stopped video"); the other
     // three are delivered ONLY to the socket whose peerId matches `to`.
@@ -990,6 +1822,13 @@ wss.on('connection', (ws, request) => {
         return;
       }
       if (type === 'rtc-live') {
+        if (data.live) {
+          const refusal = signalingRefusal(ws, null, room, true);
+          if (refusal) {
+            ws.send(JSON.stringify({ type: 'error', code: 'video-disabled', message: refusal }));
+            return;
+          }
+        }
         ws.videoLive = !!data.live;
         broadcastToRoom(room, { type: 'rtc-live', room, from: ws.peerId, live: ws.videoLive }, ws);
         broadcastRtcPeers(room);
@@ -998,6 +1837,15 @@ wss.on('connection', (ws, request) => {
       const target = findPeer(room, (data.to || '').toString());
       if (!target) {
         ws.send(JSON.stringify({ type: 'error', message: 'Peer not found' }));
+        return;
+      }
+      const refusal = signalingRefusal(ws, target, room, false);
+      if (refusal) {
+        ws.send(JSON.stringify({
+          type: 'error',
+          code: refusal === 'Video is unavailable for this user' ? 'video-unavailable' : 'video-disabled',
+          message: refusal
+        }));
         return;
       }
       try {
@@ -1103,9 +1951,110 @@ wss.on('connection', (ws, request) => {
         return;
       }
       const text = (data.text || '').toString().slice(0, 2000);
-      const user = (data.user || 'User').toString().slice(0, 50);
-      const payload = { type: 'msg', room, user, text, ts: Date.now() };
-      broadcastToRoom(room, payload);
+      if (!text.trim()) return;
+
+      // ---------- DM pipeline: requests, blocks, policy, safety ----------
+      if (isDmRoom(room)) {
+        if (!ws.handle) {
+          ws.send(JSON.stringify({ type: 'error', code: 'dm-unavailable', message: 'Login required for DMs' }));
+          return;
+        }
+        const pair = dmPairOf(room);
+        const other = pair && (pair[0] === ws.handle ? pair[1] : pair[0]);
+        const me = users[ws.handle];
+        const them = other ? users[other] : null;
+        if (!me || !them) {
+          ws.send(JSON.stringify({ type: 'error', code: 'dm-unavailable', message: 'Unavailable' }));
+          return;
+        }
+        // Sender identity is the logged-in account, never client-claimed.
+        const senderName = ws.handle;
+
+        // Anti-scam content pass (posts/DMs/rooms all assessed).
+        assessContent(me, text, 'dm message');
+        recordSignals(me, behavioralSignals(ws.handle, text, false), 'dm behavior');
+        if (me.banned) return; // banned mid-assessment (post-warning ladder)
+
+        if (anyBlock(ws.handle, other)) {
+          ws.send(JSON.stringify({ type: 'error', code: 'dm-unavailable', message: 'This conversation is unavailable' }));
+          return;
+        }
+
+        if (!pairOpen(ws.handle, other)) {
+          // If THEY already requested ME, my replying is acceptance —
+          // open the pair and fall through to normal delivery.
+          if ((me.dmRequests || []).some((r) => r.from === other)) {
+            me.dmRequests = me.dmRequests.filter((r) => r.from !== other);
+            me.dmDenied = (me.dmDenied || []).filter((h) => h !== other);
+            if (!me.dmAccepted.includes(other)) me.dmAccepted.push(other);
+            saveUsers();
+            notifyUser(other, { type: 'dm-accepted', room, by: ws.handle });
+            broadcastToRoom(room, { type: 'msg', room, user: senderName, text, ts: Date.now() });
+            return;
+          }
+          // ---- first-contact territory: trio rule, opener signals,
+          // then the request gate itself.
+          const key = `${ws.handle}>${other}`;
+          // Lead-on opener signal on the sender's first messages.
+          const openCount = (openerState.get(key) || 0) + 1;
+          openerState.set(key, openCount);
+          if (openCount <= 3 && antiscam.assessOpener(text)) {
+            recordSignals(me, ['leadon_opener'], 'first-contact opener');
+            if (me.banned) return;
+          }
+          // HARD RULE (Daniel, verbatim): the sender's first three
+          // QUESTIONS to a new contact, in order — age? / where from? /
+          // what are you looking for here? — means instant permanent ban.
+          const intent = antiscam.classifyQuestion(text);
+          if (intent) {
+            const qs = trioState.get(key) || [];
+            qs.push(intent);
+            trioState.set(key, qs);
+            if (qs.length === 3 && qs[0] === 'age' && qs[1] === 'location' && qs[2] === 'intent') {
+              logModeration({
+                handle: ws.handle, kind: 'trio-ban', signals: ['opener_trio'],
+                ips: userIps(me), detail: `Opener trio sequence banned: ${JSON.stringify(qs)}`
+              });
+              banUser(ws.handle, 'Instant ban: age / where-from / what-are-you-looking-for opener trio to a new contact', ['opener_trio']);
+              return;
+            }
+          }
+          // Denied earlier, or policy says no new requests right now.
+          if ((them.dmDenied || []).includes(ws.handle) || !dmPolicyAllows(ws.handle, other)) {
+            ws.send(JSON.stringify({ type: 'error', code: 'dm-unavailable', message: 'This conversation is unavailable' }));
+            return;
+          }
+          // Create (or refresh) the request — the message is HELD as
+          // the preview, never delivered into their conversation.
+          const existing = (them.dmRequests || []).find((r) => r.from === ws.handle);
+          if (checkMassDm(ws.handle, other)) recordSignals(me, ['mass_dm'], 'mass first-contact DMs');
+          if (me.banned) return;
+          if (existing) {
+            ws.send(JSON.stringify({ type: 'dm-request-pending', room, message: 'Request already sent — waiting for them to accept' }));
+            return;
+          }
+          them.dmRequests.push({ from: ws.handle, at: Date.now(), preview: text.slice(0, 300) });
+          saveUsers();
+          notifyUser(other, { type: 'dm-request', room, from: ws.handle });
+          ws.send(JSON.stringify({ type: 'dm-request-sent', room, message: 'Request sent — your message lands when they accept' }));
+          return;
+        }
+
+        // Open conversation: free messaging. If I message someone who
+        // had denied me but the pair is open via their acceptance,
+        // state is already consistent.
+        broadcastToRoom(room, { type: 'msg', room, user: senderName, text, ts: Date.now() });
+        return;
+      }
+
+      // ---------- public room message ----------
+      const user = ws.handle || (data.user || 'User').toString().slice(0, 50);
+      if (ws.handle && users[ws.handle]) {
+        assessContent(users[ws.handle], (data.text || '').toString(), 'room message');
+        recordSignals(users[ws.handle], behavioralSignals(ws.handle, (data.text || '').toString(), true), 'room behavior');
+        if (users[ws.handle].banned) return;
+      }
+      broadcastToRoom(room, { type: 'msg', room, user, text, ts: Date.now() });
       return;
     }
 
@@ -1163,4 +2112,3 @@ process.on('SIGTERM', shutdown);
 server.listen(PORT, () => {
   console.log(`HuSH backend running on port ${PORT}`);
 });
-    
