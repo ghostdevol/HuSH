@@ -15,6 +15,10 @@ app.use(express.json({ limit: '15mb' }));
 // 1. CONFIGURE CORS
 // This allows your frontend (both locally and on Vercel) to interact with this API
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+// The native apps (Capacitor) always run from one of these origins; they are
+// allowed regardless of the ALLOWED_ORIGINS env var.
+const APP_ORIGINS = ['https://localhost', 'capacitor://localhost', 'http://localhost'];
+const isAllowedOrigin = (origin) => APP_ORIGINS.includes(origin) || ALLOWED_ORIGINS.includes(origin);
 
 app.use(cors({
   origin: function (origin, callback) {
@@ -23,10 +27,13 @@ app.use(cors({
     // Allow server-to-server or tools like Postman (which lack an origin header)
     if (!origin) return callback(null, true);
 
-    if (ALLOWED_ORIGINS.includes(origin)) {
+    if (isAllowedOrigin(origin)) {
       callback(null, true);
     } else {
-      callback(new Error('Blocked by CORS policy'));
+      // Deny quietly: an Error here becomes a 500 for EVERY route, which
+      // reads as "server down" in the app. No CORS headers = the browser
+      // blocks the read, but the API itself stays up.
+      callback(null, false);
     }
   },
   credentials: true
@@ -878,8 +885,8 @@ wss.on('connection', (ws, request) => {
   const origin = request.headers.origin;
 
   // Origin check: allow when no origins configured, or no origin header
-  // (non-browser clients), or origin is in the allow list
-  if (ALLOWED_ORIGINS.length && origin && !ALLOWED_ORIGINS.includes(origin)) {
+  // (non-browser clients), or origin is in the allow list or an app origin
+  if (ALLOWED_ORIGINS.length && origin && !isAllowedOrigin(origin)) {
     console.warn('Connection rejected due to origin:', origin);
     ws.close(1008, 'Origin not allowed');
     return;
