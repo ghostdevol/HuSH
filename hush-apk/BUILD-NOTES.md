@@ -108,3 +108,46 @@
 - Build: same recipe as v1.1 (frontend build with
   VITE_HUSH_API=https://hush-5i33.onrender.com, dist copied to
   hush-apk/www, npx cap sync android, gradle assembleRelease --offline).
+
+## v1.2.0 (versionCode 5) — 2026-10-16
+- SAFETY + PRIVACY + INTEGRITY release (repo commit 641a6a2 + this
+  version bump). Backend (needs Daniel's Render Manual Deploy to go
+  live): DM requests with accept/deny + Requests inbox; DM video call
+  invites with server-side policy checks; server-persisted block with
+  full severance (DM/follow/feed/People/signaling); mic mute
+  (track-level, signaled) + camera blackout (track off + signaled
+  blacked-out tile); Confidants (mutual follows) + The Inner Five;
+  privacy prefs (who can DM / call / see profile) enforced REST + WS;
+  invisible presence (server never broadcasts you); account-level
+  video OFF (text-only accounts, cypher listening kept); registration
+  integrity (one account per email + per phone, grandfathered bind);
+  permanent dupe bans with IP evidence + ADMIN_HANDLES admin lane;
+  anti-scam signal module (warning → ban ladder, fee-to-release
+  weighted, opener-trio instant ban); moderation log with IP evidence
+  on every flag. Frontend: matching UI everywhere above + Site Rules /
+  Privacy Policy / Terms of Use v1.0 in-app (bundled from
+  hush-frontend/src/legal/, also served from public/legal/) with a
+  recorded agree step at registration and a one-time prompt for
+  existing accounts.
+- Icon UNCHANGED (v3 original recreation, same as v1.1.2).
+- Deliverable: ~/workspace/your_files/HuSH-Social-v1.2.0.apk
+  Size 3,405,279 B · MD5 d53e69016d298fb28e654dbc391e208b ·
+  SHA-256 f3ae02be6199b5ce2b0a4ae2c4601c444f06462dde1021fe626498263ce1a384
+- Same keystore: apksigner verifies, signer cert SHA-256
+  23261d1feb60cb9051bf9a6439e6c2c87d14eda4c1012b85ba855b6f80c0ea7f —
+  identical to v1.0–v1.1.2, clean upgrade. aapt badging: versionCode 5 /
+  versionName 1.2.0, package com.ghosttech.hush.
+- Bundled JS verified in the APK assets: production URL
+  hush-5i33.onrender.com present, "cypher" present, "Confidants",
+  "Inner Five", "call-invite", "rtc-blackout", "dm-request",
+  "Site Rules" / "Privacy Policy" all present.
+- Verified before build: backend headless suite
+  backend/tests/run-tests.js — 111 assertions, all passing (REST + WS
+  against an isolated instance); node --check clean on server.js +
+  antiscam.js; vite production build clean.
+- NOT yet live-verified: the v1.2.0 backend needs Daniel's Render
+  Manual Deploy; two-device camera-to-camera remains the one piece no
+  headless test can eyeball.
+- Build: same recipe as v1.1 (frontend build with
+  VITE_HUSH_API=https://hush-5i33.onrender.com, dist copied to
+  hush-apk/www, npx cap sync android, gradle assembleRelease --offline).
